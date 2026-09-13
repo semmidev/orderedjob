@@ -589,7 +589,11 @@ func (r *Repository) ListPendingChains(ctx context.Context) ([]string, error) {
 }
 
 func lockAppChain(ctx context.Context, tx *sql.Tx, chainID string) error {
-	_, err := tx.ExecContext(ctx, "EXEC sp_getapplock @Resource = @p1, @LockMode = 'Exclusive', @LockOwner = 'Transaction'", chainID)
+	_, err := tx.ExecContext(ctx, "sp_getapplock",
+		sql.Named("Resource", chainID),
+		sql.Named("LockMode", "Exclusive"),
+		sql.Named("LockOwner", "Transaction"),
+	)
 	return err
 }
 
