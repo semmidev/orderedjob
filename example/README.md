@@ -1,26 +1,25 @@
 # OrderedJob Example Application
 
-Aplikasi contoh yang menunjukkan penggunaan lengkap pustaka `orderedjob` dengan database persistence PostgreSQL.
+Aplikasi contoh yang menunjukkan penggunaan lengkap pustaka `orderedjob` dengan persistence database **PostgreSQL** dan **Microsoft SQL Server**.
 
 ## Prasyarat
 
 - **Go 1.22+**
-- **Docker & Docker Compose** (atau PostgreSQL 14+ lokal)
+- **Docker & Docker Compose** (atau instance PostgreSQL & SQL Server lokal)
 
 ## Cara Menjalankan
 
-### 1. Jalankan PostgreSQL
+### 1. Jalankan PostgreSQL & SQL Server via Docker Compose
 
-Gunakan Docker Compose untuk menjalankan instance PostgreSQL:
+Gunakan Docker Compose untuk menjalankan container PostgreSQL dan SQL Server secara bersamaan:
 
 ```bash
 docker compose up -d
 ```
 
-Perintah di atas akan menjalankan PostgreSQL pada port `5432` dengan kredensial bawaan:
-- **Database**: `orderedjob`
-- **User**: `postgres`
-- **Password**: `postgres`
+Perintah di atas akan menjalankan:
+- **PostgreSQL**: Port `5432` (`orderedjob` DB, user `postgres`, password `postgres`).
+- **Microsoft SQL Server**: Port `1433` (user `sa`, password `StrongPassword123!`).
 
 ### 2. Jalankan Program Contoh
 
@@ -30,15 +29,21 @@ Jalankan file `main.go`:
 go run main.go
 ```
 
-Jika kamu menggunakan instance PostgreSQL lain, tentukan variabel lingkungan `DATABASE_URL`:
+Program `main.go` akan mengeksekusi dua sesi demo secara berurutan:
+1. **Bagian 1**: Demo alur kerja dengan **PostgreSQL** repository adapter.
+2. **Bagian 2**: Demo alur kerja dengan **Microsoft SQL Server** repository adapter.
+
+Jika kamu menggunakan instance database yang berbeda, kamu dapat mengatur variabel lingkungan:
 
 ```bash
-DATABASE_URL="postgres://username:password@localhost:5432/my_db?sslmode=disable" go run main.go
+DATABASE_URL="postgres://username:password@localhost:5432/my_db?sslmode=disable" \
+MSSQL_URL="sqlserver://sa:StrongPassword123!@localhost:1433?database=master&encrypt=disable" \
+go run main.go
 ```
 
-### 3. Hentikan PostgreSQL
+### 3. Hentikan Container Database
 
-Untuk menghentikan dan menghapus container serta volume PostgreSQL:
+Untuk menghentikan dan membersihkan container serta volume database:
 
 ```bash
 docker compose down -v
@@ -48,25 +53,26 @@ docker compose down -v
 
 ## Fitur-Fitur Utama yang Ditunjukkan (`main.go`)
 
-Program contoh ini mencakup demonstrasi dari seluruh kemampuan pustaka `orderedjob`:
+Program contoh ini mencakup demonstrasi dari seluruh kemampuan pustaka `orderedjob` pada kedua engine database:
 
-### 1. Persistence & Otomatisasi Skema
-- **Auto Migration**: Menjalankan migrasi DDL tabel `ordered_jobs` secara otomatis melalui `repo.Migrate(ctx)`.
-- **PGX Connection Pooling**: Menggunakan `pgxpool.Pool` untuk performa kueri database yang optimal.
+### 1. Multi-Database Persistence & Otomatisasi Skema
+- **PostgreSQL Repository (`pgRepo.New`)**: Menggunakan connection pool `pgxpool.Pool` dan perintah DDL PostgreSQL.
+- **SQL Server Repository (`mssqlRepo.New`)**: Menggunakan `database/sql` (`*sql.DB`) dan T-SQL `UPDLOCK, READPAST`.
+- **Auto Migration**: Menjalankan migrasi DDL tabel `ordered_jobs` secara otomatis via `repo.Migrate(ctx)`.
 
 ### 2. Konfigurasi Engine & Worker Pool
 - **`WithConcurrency(5)`**: Menjalankan 5 worker goroutine secara paralel.
 - **`WithPollInterval(100ms)`**: Interval polling job yang responsif.
 - **`WithLease(15s)`**: Batas waktu kepemilikan lock job sebelum dianggap lelap (*stale*).
 - **`WithSlogLogger(logger)`**: Integrasi terstruktur dengan `log/slog` bawaan Go.
-- **`WithNotify(true)`**: Bangunkan worker secara cepat saat job baru datang via PostgreSQL `LISTEN/NOTIFY`.
+- **`WithNotify(true)`**: Bangunkan worker secara cepat saat job baru datang.
 - **`WithRetryPolicy(...)`**: Strategi percobaan ulang (*retry*) berbasis exponential backoff dengan jitter.
 
 ### 3. Pendaftaran Handler (Type-Safe Generics & Dynamic)
 - **Type-Safe Handlers (`RegisterTyped[T]`)**: Pendaftaran handler dengan deserialisasi payload JSON otomatis berbasis Go Generics untuk `OrderPayload` dan `NotificationPayload`.
 - **Dynamic Raw Handler (`RegisterFunc`)**: Pendaftaran handler langsung menggunakan payload `json.RawMessage` (contoh: `AuditLog`).
 
-### 4. Distirbuted Tracing (Trace Context Propagation)
+### 4. Distributed Tracing (Trace Context Propagation)
 - **`WithTraceID(ctx, traceID)`**: Menyisipkan trace ID ke dalam context saat enqueue.
 - **`ExtractTraceID(ctx)`**: Membaca trace ID dari context di dalam handler untuk korelasi log end-to-end.
 
@@ -77,7 +83,7 @@ Program contoh ini mencakup demonstrasi dari seluruh kemampuan pustaka `orderedj
 ### 6. Mode Enkui & Jaminan Urutan FIFO
 - **Explicit Sequence FIFO**: Menjamin urutan eksekusi pekerjaan tepat sesuai indeks urutan (`Sequence = 1, 2, 3...`) pada tiap chain isolasi.
 - **Single-Transaction Batch Enqueue (`EnqueueBatch`)**: Memasukkan banyak job sekaligus dalam 1 transaksi database yang atomic.
-- **Auto-Sequence (`Sequence = 0`)**: Menggenerasi indeks urutan berikutnya secara otomatis di sisi database.
+- **Auto-Sequence (`Sequence = 0`)**: Menggenerasi indeks urutan berikutnya secara otomatis di sisi database (`MAX(sequence) + 1`).
 
 ### 7. Pengisolasian Tenant, Idempotensi, & Penjadwalan
 - **Idempotency Key**: Mencegah duplikasi enqueue job akibat percobaan ulang HTTP/gRPC client.
@@ -107,96 +113,3 @@ Pustaka `orderedjob` menyediakan antarmuka `orderedjob.Metrics` yang dirancang a
 | `IncClaimConflicts()` | Counter | `orderedjob_claim_conflicts_total` | Total benturan klaim lock (*optimistic lock conflict*) |
 | `IncStaleRecovered(n)` | Counter | `orderedjob_stale_recovered_total` | Total job lelap (*stale lease*) yang dipulihkan kembali |
 | `IncBlockedChain()` | Counter | `orderedjob_blocked_chains_total` | Total chain yang terhenti akibat urutan pekerjaan yang belum selesai |
-
-### Contoh Adapter Prometheus (`client_golang`)
-
-Untuk mengintegrasikan `orderedjob` dengan Prometheus di aplikasi produksi, kamu cukup membuat struct adapter sederhana:
-
-```go
-package metrics
-
-import (
-	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/semmidev/orderedjob"
-)
-
-type PrometheusMetrics struct {
-	claimed        prometheus.Counter
-	completed      *prometheus.CounterVec
-	failed         *prometheus.CounterVec
-	retries        *prometheus.CounterVec
-	execDuration   *prometheus.HistogramVec
-	queueDelay     *prometheus.HistogramVec
-	activeLeases   prometheus.Gauge
-	claimConflicts prometheus.Counter
-	staleRecovered prometheus.Counter
-	blockedChains  prometheus.Counter
-}
-
-func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
-	m := &PrometheusMetrics{
-		claimed: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "orderedjob_jobs_claimed_total",
-			Help: "Total number of jobs claimed by workers",
-		}),
-		completed: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "orderedjob_jobs_completed_total",
-			Help: "Total number of completed jobs",
-		}, []string{"job_type"}),
-		failed: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "orderedjob_jobs_failed_total",
-			Help: "Total number of failed jobs",
-		}, []string{"job_type"}),
-		retries: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "orderedjob_job_retries_total",
-			Help: "Total number of job retries",
-		}, []string{"job_type"}),
-		execDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "orderedjob_job_execution_duration_seconds",
-			Help:    "Execution duration of jobs in seconds",
-			Buckets: prometheus.DefBuckets,
-		}, []string{"job_type"}),
-		queueDelay: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "orderedjob_job_queue_delay_seconds",
-			Help:    "Queue delay duration in seconds",
-			Buckets: prometheus.DefBuckets,
-		}, []string{"job_type"}),
-		activeLeases: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "orderedjob_active_leases",
-			Help: "Current active leases held by worker",
-		}),
-		claimConflicts: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "orderedjob_claim_conflicts_total",
-			Help: "Total claim conflicts encountered",
-		}),
-		staleRecovered: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "orderedjob_stale_recovered_total",
-			Help: "Total stale leases recovered",
-		}),
-		blockedChains: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "orderedjob_blocked_chains_total",
-			Help: "Total blocked chains encountered",
-		}),
-	}
-
-	reg.MustRegister(
-		m.claimed, m.completed, m.failed, m.retries,
-		m.execDuration, m.queueDelay, m.activeLeases,
-		m.claimConflicts, m.staleRecovered, m.blockedChains,
-	)
-	return m
-}
-
-func (p *PrometheusMetrics) IncClaimed()                                         { p.claimed.Inc() }
-func (p *PrometheusMetrics) IncCompleted(jobType string)                         { p.completed.WithLabelValues(jobType).Inc() }
-func (p *PrometheusMetrics) IncFailed(jobType string)                            { p.failed.WithLabelValues(jobType).Inc() }
-func (p *PrometheusMetrics) IncRetry(jobType string)                             { p.retries.WithLabelValues(jobType).Inc() }
-func (p *PrometheusMetrics) ObserveExecDuration(jobType string, d time.Duration) { p.execDuration.WithLabelValues(jobType).Observe(d.Seconds()) }
-func (p *PrometheusMetrics) ObserveQueueDelay(jobType string, d time.Duration)   { p.queueDelay.WithLabelValues(jobType).Observe(d.Seconds()) }
-func (p *PrometheusMetrics) SetActiveLeases(n int)                               { p.activeLeases.Set(float64(n)) }
-func (p *PrometheusMetrics) IncClaimConflicts()                                  { p.claimConflicts.Inc() }
-func (p *PrometheusMetrics) IncStaleRecovered(n int)                             { p.staleRecovered.Add(float64(n)) }
-func (p *PrometheusMetrics) IncBlockedChain()                                    { p.blockedChains.Inc() }
-```
