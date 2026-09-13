@@ -61,6 +61,12 @@ func (r *Repository) Enqueue(ctx context.Context, req orderedjob.EnqueueRequest)
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", req.ChainID); err != nil {
 			return err
 		}
+		if existing, found, err := findExistingByIdempotencyKey(ctx, tx, req.IdempotencyKey); err != nil {
+			return err
+		} else if found {
+			job = existing
+			return nil
+		}
 		seq := req.Sequence
 		if seq == 0 {
 			var max *int64
@@ -177,6 +183,18 @@ func (r *Repository) EnqueueBatch(ctx context.Context, reqs []orderedjob.Enqueue
 }
 
 func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req orderedjob.EnqueueRequest, previousInBatch []orderedjob.Job) (orderedjob.Job, error) {
+	if existing, found, err := findExistingByIdempotencyKey(ctx, tx, req.IdempotencyKey); err != nil {
+		return orderedjob.Job{}, err
+	} else if found {
+		return existing, nil
+	}
+	if req.IdempotencyKey != "" {
+		for _, o := range previousInBatch {
+			if o.IdempotencyKey == req.IdempotencyKey {
+				return o, nil
+			}
+		}
+	}
 	seq := req.Sequence
 	if seq == 0 {
 		var max *int64
@@ -610,6 +628,26 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func findExistingByIdempotencyKey(ctx context.Context, tx pgx.Tx, key string) (orderedjob.Job, bool, error) {
+	if key == "" {
+		return orderedjob.Job{}, false, nil
+	}
+	var existing orderedjob.Job
+	err := tx.QueryRow(ctx, `
+		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(trace_id, '')
+		FROM ordered_jobs
+		WHERE idempotency_key = $1
+	`, key).Scan(
+		&existing.ID, &existing.ChainID, &existing.Sequence, &existing.Type, &existing.Payload, &existing.Status, &existing.Attempt, &existing.MaxAttempts, &existing.AvailableAt, &existing.DeadlineAt, &existing.WorkerID, &existing.LeaseUntil, &existing.LeaseGeneration, &existing.CreatedAt, &existing.UpdatedAt, &existing.IdempotencyKey, &existing.TenantID, &existing.TraceID,
+	)
+	if err == nil {
+		return existing, true, nil
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		return orderedjob.Job{}, false, nil
+	}
+	return orderedjob.Job{}, false, err
 }
 
 func distinctChains(reqs []orderedjob.EnqueueRequest) []string {

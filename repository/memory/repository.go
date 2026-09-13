@@ -70,6 +70,13 @@ func (r *repo) enqueueSingleInMemory(req orderedjob.EnqueueRequest) (orderedjob.
 	if chain == "" {
 		return orderedjob.Job{}, fmt.Errorf("chain_id required")
 	}
+	if req.IdempotencyKey != "" {
+		for _, existing := range r.jobs {
+			if existing.IdempotencyKey == req.IdempotencyKey {
+				return existing, nil
+			}
+		}
+	}
 	seq := req.Sequence
 	if seq == 0 {
 		max := int64(0)
