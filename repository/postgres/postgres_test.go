@@ -2,6 +2,8 @@ package postgres_test
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,19 +24,34 @@ func setupTestPostgres(t *testing.T, ctx context.Context) (*pgxpool.Pool, func()
 		t.Skip("skipping real PostgreSQL testcontainers integration test in -short mode")
 	}
 
-	container, err := pgContainer.Run(ctx,
-		"postgres:17-alpine",
+	// Auto-detect Podman / Docker socket environments:
+	// If TESTCONTAINERS_RYUK_DISABLED is not explicitly set, check if disabling Ryuk helps Podman compatibility.
+	if os.Getenv("TESTCONTAINERS_RYUK_DISABLED") == "" {
+		if isPodmanOrCustomSocket() {
+			_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+		}
+	}
+
+	reqOpts := []testcontainers.ContainerCustomizer{
 		pgContainer.WithDatabase("orderedjob_test"),
 		pgContainer.WithUsername("postgres"),
 		pgContainer.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second),
+				WithStartupTimeout(30 * time.Second),
 		),
-	)
+	}
+
+	container, err := pgContainer.Run(ctx, "postgres:17-alpine", reqOpts...)
+	if err != nil && isPodmanOrNetworkError(err) {
+		// Fallback retry with Ryuk disabled
+		_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+		container, err = pgContainer.Run(ctx, "postgres:17-alpine", reqOpts...)
+	}
+
 	if err != nil {
-		t.Skipf("skipping testcontainers integration test (Docker daemon might be unavailable): %v", err)
+		t.Skipf("skipping testcontainers integration test (Docker/Podman daemon might be unavailable): %v", err)
 		return nil, func() {}
 	}
 
@@ -50,6 +67,23 @@ func setupTestPostgres(t *testing.T, ctx context.Context) (*pgxpool.Pool, func()
 	}
 
 	return pool, cleanup
+}
+
+func isPodmanOrCustomSocket() bool {
+	dockerHost := strings.ToLower(os.Getenv("DOCKER_HOST"))
+	return strings.Contains(dockerHost, "podman") || os.Getenv("PODMAN_SYSTEM_SOCKET") != ""
+}
+
+func isPodmanOrNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bridge") ||
+		strings.Contains(msg, "network not found") ||
+		strings.Contains(msg, "reaper") ||
+		strings.Contains(msg, "ryuk") ||
+		strings.Contains(msg, "podman")
 }
 
 func TestPostgresRepository_TableDriven(t *testing.T) {

@@ -3,6 +3,8 @@ package sqlserver_test
 import (
 	"context"
 	"database/sql"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,17 +25,31 @@ func setupTestMSSQL(t *testing.T, ctx context.Context) (*sql.DB, func()) {
 		t.Skip("skipping real SQL Server testcontainers integration test in -short mode")
 	}
 
-	container, err := mssqlContainer.Run(ctx,
-		"mcr.microsoft.com/mssql/server:2022-latest",
+	// Auto-detect Podman / Docker socket environments:
+	if os.Getenv("TESTCONTAINERS_RYUK_DISABLED") == "" {
+		if isPodmanOrCustomSocket() {
+			_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+		}
+	}
+
+	reqOpts := []testcontainers.ContainerCustomizer{
 		mssqlContainer.WithAcceptEULA(),
 		mssqlContainer.WithPassword("StrongPassword123!"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("SQL Server is now ready for client connections").
-				WithStartupTimeout(60*time.Second),
+				WithStartupTimeout(60 * time.Second),
 		),
-	)
+	}
+
+	container, err := mssqlContainer.Run(ctx, "mcr.microsoft.com/mssql/server:2022-latest", reqOpts...)
+	if err != nil && isPodmanOrNetworkError(err) {
+		// Fallback retry with Ryuk disabled for Podman compatibility
+		_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+		container, err = mssqlContainer.Run(ctx, "mcr.microsoft.com/mssql/server:2022-latest", reqOpts...)
+	}
+
 	if err != nil {
-		t.Skipf("skipping testcontainers mssql integration test (Docker daemon might be unavailable): %v", err)
+		t.Skipf("skipping testcontainers mssql integration test (Docker/Podman daemon might be unavailable): %v", err)
 		return nil, func() {}
 	}
 
@@ -53,6 +69,23 @@ func setupTestMSSQL(t *testing.T, ctx context.Context) (*sql.DB, func()) {
 	}
 
 	return db, cleanup
+}
+
+func isPodmanOrCustomSocket() bool {
+	dockerHost := strings.ToLower(os.Getenv("DOCKER_HOST"))
+	return strings.Contains(dockerHost, "podman") || os.Getenv("PODMAN_SYSTEM_SOCKET") != ""
+}
+
+func isPodmanOrNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bridge") ||
+		strings.Contains(msg, "network not found") ||
+		strings.Contains(msg, "reaper") ||
+		strings.Contains(msg, "ryuk") ||
+		strings.Contains(msg, "podman")
 }
 
 func TestSQLServerRepository_TableDriven(t *testing.T) {
