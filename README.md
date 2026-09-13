@@ -51,6 +51,7 @@ go get github.com/semmidev/orderedjob
 - 🛡️ **Fencing Protection**: Fencing token (`lease_generation`) mencegah race condition dari worker yang terhambat (*lagging*).
 - 🛠️ **Manajemen DLQ**: Menyediakan API `ReplayJob` dan `SkipJob` untuk memulihkan atau melewati job yang gagal.
 - 🌐 **Distributed Tracing**: Dukungan *TraceContext propagation* (`TraceID`) antar pemanggilan asinkron.
+- 🗄️ **Multi-Database Support**: Dukungan penuh persistence engine untuk **PostgreSQL** (`pgxpool`) dan **Microsoft SQL Server** (T-SQL `UPDLOCK, READPAST`).
 - 🔌 **In-Memory Adapter**: Adapter `memory` bawaan untuk pengujian cepat tanpa database.
 
 ---
