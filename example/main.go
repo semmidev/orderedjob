@@ -87,7 +87,7 @@ func (m *CustomMetrics) PrintSummary() {
 	fmt.Printf("Claim Conflicts  (orderedjob_claim_conflicts_total)      : %d\n", m.Conflicts.Load())
 	fmt.Printf("Blocked Chains   (orderedjob_blocked_chains_total)       : %d\n", m.BlockedChains.Load())
 	fmt.Printf("Active Leases    (orderedjob_active_leases)              : %d\n", m.ActiveLeases.Load())
-	
+
 	count := m.ExecCount.Load()
 	if count > 0 {
 		avgMs := float64(m.TotalExecNs.Load()) / float64(count) / 1e6

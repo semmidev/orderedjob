@@ -2,137 +2,295 @@ package orderedjob_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/semmidev/orderedjob"
 	"github.com/semmidev/orderedjob/repository/memory"
+	"github.com/semmidev/orderedjob/retry"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestOrderingStrict(t *testing.T) {
-	repo := memory.New()
-	eng := orderedjob.New(repo, orderedjob.WithConcurrency(5), orderedjob.WithPollInterval(10*time.Millisecond), orderedjob.WithLogger(orderedjob.NoopLogger{}))
-
-	var executed []string
-	var mu struct{ m []string }
-	ch := make(chan string, 100)
-
-	eng.Register("test", orderedjob.HandlerFunc(func(ctx context.Context, job orderedjob.Job) error {
-		ch <- job.ChainID + ":" + string(rune(job.Sequence+'0'))
-		return nil
-	}))
-
-	ctx := context.Background()
-	if err := eng.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer eng.Shutdown(ctx)
-
-	for i := 1; i <= 5; i++ {
-		_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "A", Sequence: int64(i), Type: "test", Payload: map[string]int{"i": i}})
-		if err != nil {
-			t.Fatalf("enqueue %d: %v", i, err)
-		}
-	}
-
-	timeout := time.After(3 * time.Second)
-	var results []string
-	for len(results) < 5 {
-		select {
-		case r := <-ch:
-			results = append(results, r)
-		case <-timeout:
-			t.Fatalf("timeout waiting, got %v", results)
-		}
-	}
-
-	expected := []string{"A:1", "A:2", "A:3", "A:4", "A:5"}
-	for i, exp := range expected {
-		if results[i] != exp {
-			t.Fatalf("ordering violation: expected %v got %v", expected, results)
-		}
-	}
-	_ = executed
-	_ = mu
-	_ = uuid.New()
+type TestPayload struct {
+	ID    string `json:"id"`
+	Value int    `json:"value"`
 }
 
-func TestConcurrentAcrossChains(t *testing.T) {
-	repo := memory.New()
-	eng := orderedjob.New(repo, orderedjob.WithConcurrency(10), orderedjob.WithPollInterval(10*time.Millisecond))
+func TestEngine_EnqueueValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       orderedjob.EnqueueRequest
+		expectErr bool
+		errString string
+	}{
+		{
+			name: "valid explicit sequence enqueue",
+			req: orderedjob.EnqueueRequest{
+				ChainID:  "chain-1",
+				Sequence: 1,
+				Type:     "ProcessItem",
+				Payload:  TestPayload{ID: "item-1", Value: 100},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid auto sequence enqueue (sequence 0)",
+			req: orderedjob.EnqueueRequest{
+				ChainID:  "chain-2",
+				Sequence: 0,
+				Type:     "ProcessItem",
+				Payload:  TestPayload{ID: "item-2", Value: 200},
+			},
+			expectErr: false,
+		},
+		{
+			name: "missing chain ID",
+			req: orderedjob.EnqueueRequest{
+				ChainID:  "",
+				Sequence: 1,
+				Type:     "ProcessItem",
+			},
+			expectErr: true,
+			errString: "chain_id required",
+		},
+		{
+			name: "missing job type",
+			req: orderedjob.EnqueueRequest{
+				ChainID:  "chain-3",
+				Sequence: 1,
+				Type:     "",
+			},
+			expectErr: true,
+			errString: "job type required",
+		},
+		{
+			name: "invalid sequence gap (first sequence must be 1)",
+			req: orderedjob.EnqueueRequest{
+				ChainID:  "chain-gap",
+				Sequence: 5,
+				Type:     "ProcessItem",
+			},
+			expectErr: true,
+			errString: "sequence gap",
+		},
+	}
 
-	ch := make(chan string, 100)
-	eng.Register("test", orderedjob.HandlerFunc(func(ctx context.Context, job orderedjob.Job) error {
-		time.Sleep(20 * time.Millisecond)
-		ch <- job.ChainID
-		return nil
-	}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := memory.New()
+			eng := orderedjob.New(repo, orderedjob.WithLogger(orderedjob.NoopLogger{}))
+			ctx := context.Background()
 
-	ctx := context.Background()
-	_ = eng.Start(ctx)
-	defer eng.Shutdown(ctx)
+			job, err := eng.Enqueue(ctx, tt.req)
 
-	for _, chain := range []string{"X", "Y", "Z"} {
-		for i := 1; i <= 3; i++ {
-			_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: chain, Sequence: int64(i), Type: "test"})
-			if err != nil {
-				t.Fatal(err)
+			if tt.expectErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errString)
+			} else {
+				require.NoError(t, err)
+				assert.NotEmpty(t, job.ID)
+				assert.Equal(t, tt.req.ChainID, job.ChainID)
+				assert.Equal(t, tt.req.Type, job.Type)
 			}
-		}
-	}
-
-	timeout := time.After(3 * time.Second)
-	var got []string
-	for len(got) < 9 {
-		select {
-		case r := <-ch:
-			got = append(got, r)
-		case <-timeout:
-			t.Fatalf("timeout got %d", len(got))
-		}
-	}
-	if len(got) != 9 {
-		t.Fatalf("expected 9, got %d", len(got))
+		})
 	}
 }
 
-func TestRetryAndLeaseRecovery(t *testing.T) {
+func TestEngine_StrictFIFOOrdering(t *testing.T) {
 	repo := memory.New()
-	eng := orderedjob.New(repo, orderedjob.WithConcurrency(1), orderedjob.WithPollInterval(10*time.Millisecond), orderedjob.WithLease(100*time.Millisecond), orderedjob.WithRecoveryInterval(50*time.Millisecond))
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(5),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
 
-	attempts := 0
-	ch := make(chan int, 10)
-	eng.Register("retry", orderedjob.HandlerFunc(func(ctx context.Context, job orderedjob.Job) error {
-		attempts++
-		if attempts < 3 {
-			return orderedjob.Retryable(assertErr("transient"))
-		}
-		ch <- attempts
+	var mu sync.Mutex
+	var executed []string
+
+	orderedjob.RegisterTyped(eng, "ProcessStep", func(ctx context.Context, job orderedjob.Job, payload TestPayload) error {
+		mu.Lock()
+		executed = append(executed, fmt.Sprintf("%s:%d", job.ChainID, job.Sequence))
+		mu.Unlock()
 		return nil
-	}))
+	})
 
 	ctx := context.Background()
-	_ = eng.Start(ctx)
-	defer eng.Shutdown(ctx)
+	err := eng.Start(ctx)
+	require.NoError(t, err)
+	defer func() {
+		_ = eng.Shutdown(ctx)
+	}()
 
-	_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "R", Type: "retry"})
-	if err != nil {
-		t.Fatal(err)
+	// Enqueue 5 jobs in chain "chain-fifo"
+	for seq := 1; seq <= 5; seq++ {
+		_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-fifo",
+			Sequence: int64(seq),
+			Type:     "ProcessStep",
+			Payload:  TestPayload{ID: "step", Value: seq},
+		})
+		require.NoError(t, err)
 	}
+
+	// Assert order of execution
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(executed) == 5
+	}, 3*time.Second, 20*time.Millisecond, "expected 5 jobs to complete")
+
+	mu.Lock()
+	defer mu.Unlock()
+	expected := []string{"chain-fifo:1", "chain-fifo:2", "chain-fifo:3", "chain-fifo:4", "chain-fifo:5"}
+	assert.Equal(t, expected, executed, "FIFO sequence order must be strictly preserved")
+}
+
+func TestEngine_BatchEnqueue(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo, orderedjob.WithLogger(orderedjob.NoopLogger{}))
+	ctx := context.Background()
+
+	batchReqs := []orderedjob.EnqueueRequest{
+		{ChainID: "batch-chain", Sequence: 0, Type: "TaskA", Payload: TestPayload{ID: "1"}},
+		{ChainID: "batch-chain", Sequence: 0, Type: "TaskB", Payload: TestPayload{ID: "2"}},
+		{ChainID: "batch-chain", Sequence: 0, Type: "TaskC", Payload: TestPayload{ID: "3"}},
+	}
+
+	jobs, err := eng.EnqueueBatch(ctx, batchReqs)
+	require.NoError(t, err)
+	require.Len(t, jobs, 3)
+
+	assert.Equal(t, int64(1), jobs[0].Sequence)
+	assert.Equal(t, int64(2), jobs[1].Sequence)
+	assert.Equal(t, int64(3), jobs[2].Sequence)
+}
+
+func TestEngine_RetryableAndPermanentError(t *testing.T) {
+	tests := []struct {
+		name              string
+		handlerFn         func(attempts *atomic.Int32) func(ctx context.Context, job orderedjob.Job) error
+		expectedAttempts  int32
+		expectedCompleted bool
+	}{
+		{
+			name: "transient error retries until success",
+			handlerFn: func(attempts *atomic.Int32) func(ctx context.Context, job orderedjob.Job) error {
+				return func(ctx context.Context, job orderedjob.Job) error {
+					count := attempts.Add(1)
+					if count < 3 {
+						return orderedjob.Retryable(errors.New("temporary network timeout"))
+					}
+					return nil
+				}
+			},
+			expectedAttempts:  3,
+			expectedCompleted: true,
+		},
+		{
+			name: "permanent non-retryable error stops immediately",
+			handlerFn: func(attempts *atomic.Int32) func(ctx context.Context, job orderedjob.Job) error {
+				return func(ctx context.Context, job orderedjob.Job) error {
+					attempts.Add(1)
+					return orderedjob.NonRetryable(errors.New("unrecoverable validation error"))
+				}
+			},
+			expectedAttempts:  1,
+			expectedCompleted: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := memory.New()
+			eng := orderedjob.New(repo,
+				orderedjob.WithConcurrency(1),
+				orderedjob.WithPollInterval(10*time.Millisecond),
+				orderedjob.WithLogger(orderedjob.NoopLogger{}),
+				orderedjob.WithRetryPolicy(retry.Policy{
+					MaxAttempts: 3,
+					BaseDelay:   10 * time.Millisecond,
+					MaxDelay:    50 * time.Millisecond,
+				}),
+			)
+
+			var attempts atomic.Int32
+			doneCh := make(chan bool, 1)
+
+			eng.RegisterFunc("TestJob", func(ctx context.Context, job orderedjob.Job) error {
+				err := tt.handlerFn(&attempts)(ctx, job)
+				if err == nil {
+					doneCh <- true
+				}
+				return err
+			})
+
+			ctx := context.Background()
+			err := eng.Start(ctx)
+			require.NoError(t, err)
+			defer func() { _ = eng.Shutdown(ctx) }()
+
+			_, err = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+				ChainID:  "retry-chain-" + tt.name,
+				Sequence: 1,
+				Type:     "TestJob",
+			})
+			require.NoError(t, err)
+
+			if tt.expectedCompleted {
+				select {
+				case <-doneCh:
+					assert.Equal(t, tt.expectedAttempts, attempts.Load())
+				case <-time.After(2 * time.Second):
+					t.Fatal("timed out waiting for job completion")
+				}
+			} else {
+				time.Sleep(150 * time.Millisecond)
+				assert.Equal(t, tt.expectedAttempts, attempts.Load())
+			}
+		})
+	}
+}
+
+func TestEngine_TraceIDContextPropagation(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	capturedTraceID := make(chan string, 1)
+	orderedjob.RegisterTyped(eng, "TraceTest", func(ctx context.Context, job orderedjob.Job, payload map[string]string) error {
+		traceID := orderedjob.ExtractTraceID(ctx)
+		capturedTraceID <- traceID
+		return nil
+	})
+
+	ctx := context.Background()
+	err := eng.Start(ctx)
+	require.NoError(t, err)
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	expectedTraceID := "trace-xyz-12345"
+	ctx = orderedjob.WithTraceID(ctx, expectedTraceID)
+
+	_, err = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "trace-chain",
+		Sequence: 1,
+		Type:     "TraceTest",
+		Payload:  map[string]string{"foo": "bar"},
+	})
+	require.NoError(t, err)
 
 	select {
-	case a := <-ch:
-		if a != 3 {
-			t.Fatalf("expected 3 attempts, got %d", a)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout retry")
+	case traceID := <-capturedTraceID:
+		assert.Equal(t, expectedTraceID, traceID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for trace_id extraction")
 	}
 }
-
-func assertErr(s string) error { return &testErr{s} }
-
-type testErr struct{ s string }
-
-func (e *testErr) Error() string { return e.s }
