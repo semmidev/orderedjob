@@ -1,8 +1,21 @@
-# orderedjob — High-Throughput Ordered Job Engine for Go
+<div align="center">
 
-`github.com/semmidev/orderedjob` adalah library Go bertingkat enterprise yang menyediakan **strict per-chain ordering** dengan concurrency tinggi antar chain. PostgreSQL bertindak sebagai *single source of truth* untuk state management, ordering, locking, automatic retry, stale lease recovery, dan auditability.
+  <h1>⚡ OrderedJob</h1>
+  <p><b>High-Throughput, PostgreSQL-Backed Ordered Job Orchestrator for Go</b></p>
 
----
+  <p>
+    <a href="https://pkg.go.dev/github.com/semmidev/orderedjob"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?style=for-the-badge&logo=go&logoColor=white" alt="GoDoc" /></a>
+    <a href="https://github.com/semmidev/orderedjob/releases"><img src="https://img.shields.io/github/v/tag/semmidev/orderedjob?color=00ADD8&label=release&style=for-the-badge&logo=github" alt="Release" /></a>
+    <a href="https://github.com/semmidev/orderedjob/actions"><img src="https://img.shields.io/github/actions/workflow/status/semmidev/orderedjob/ci.yml?branch=main&label=CI&style=for-the-badge&logo=github-actions" alt="CI" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" /></a>
+    <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" /></a>
+  </p>
+
+  <p>
+    <code>github.com/semmidev/orderedjob</code> menyediakan <b>strict per-chain FIFO ordering</b> dengan skala throughput tinggi secara konkuransi antar-chain.<br/>PostgreSQL bertindak sebagai <i>single source of truth</i> untuk state management, row locking, event notification stream, dan automatic recovery.
+  </p>
+
+</div>
 
 ## 🌟 Fitur Utama
 
