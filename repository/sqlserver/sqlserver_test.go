@@ -41,11 +41,12 @@ func setupTestMSSQL(t *testing.T, ctx context.Context) (*sql.DB, func()) {
 		),
 	}
 
-	container, err := mssqlContainer.Run(ctx, "mcr.microsoft.com/mssql/server:2022-latest", reqOpts...)
+	imageName := getMSSQLImage()
+	container, err := mssqlContainer.Run(ctx, imageName, reqOpts...)
 	if err != nil && isPodmanOrNetworkError(err) {
 		// Fallback retry with Ryuk disabled for Podman compatibility
 		_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
-		container, err = mssqlContainer.Run(ctx, "mcr.microsoft.com/mssql/server:2022-latest", reqOpts...)
+		container, err = mssqlContainer.Run(ctx, imageName, reqOpts...)
 	}
 
 	if err != nil {
@@ -105,6 +106,15 @@ func isPodmanOrNetworkError(err error) bool {
 		strings.Contains(msg, "reaper") ||
 		strings.Contains(msg, "ryuk") ||
 		strings.Contains(msg, "podman")
+}
+
+func getMSSQLImage() string {
+	if img := os.Getenv("MSSQL_IMAGE"); img != "" {
+		return img
+	}
+	// Default to azure-sql-edge which natively supports both linux/arm64 (macOS Apple Silicon)
+	// and linux/amd64 (Linux CI) architectures.
+	return "mcr.microsoft.com/azure-sql-edge:latest"
 }
 
 func TestSQLServerRepository_TableDriven(t *testing.T) {
