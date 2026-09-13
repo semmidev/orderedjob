@@ -19,6 +19,21 @@
 
 ---
 
+## 📌 Daftar Isi
+
+- [📦 Instalasi](#-instalasi)
+- [✨ Fitur Utama](#-fitur-utama)
+- [💡 Contoh Usecase](#-contoh-usecase)
+- [🏗️ Arsitektur](#️-arsitektur)
+- [🚦 State Machine](#-state-machine)
+- [🚀 Contoh Penggunaan](#-contoh-penggunaan)
+- [🛠️ Penanganan Job Gagal (DLQ Operations)](#️-penanganan-job-gagal-dlq-operations)
+- [⚙️ Opsi Konfigurasi Engine](#️-opsi-konfigurasi-engine)
+- [🧪 Testing](#-testing)
+- [📄 Lisensi](#-lisensi)
+
+---
+
 ## 📦 Instalasi
 
 ```bash
@@ -37,6 +52,16 @@ go get github.com/semmidev/orderedjob
 - 🛠️ **Manajemen DLQ**: Menyediakan API `ReplayJob` dan `SkipJob` untuk memulihkan atau melewati job yang gagal.
 - 🌐 **Distributed Tracing**: Dukungan *TraceContext propagation* (`TraceID`) antar pemanggilan asinkron.
 - 🔌 **In-Memory Adapter**: Adapter `memory` bawaan untuk pengujian cepat tanpa database.
+
+---
+
+## 💡 Contoh Usecase
+
+- **💳 Pipeline Transaksi Finansial**: Menjamin siklus pembayaran (*Validate Account* ➔ *Hold Balance* ➔ *Transfer* ➔ *Send Receipt*) berjalan tepat berurutan per akun tanpa race condition.
+- **📦 Pemrosesan Pesanan E-Commerce**: Memproses tahapan pesanan (*Create Order* ➔ *Deduct Inventory* ➔ *Generate Invoice* ➔ *Ship Package*) sesuai urutan per pesanan.
+- **👤 User Onboarding Workflow**: Eksekusi berurutan untuk registrasi pengguna (*Create User* ➔ *Send Verification Email* ➔ *Provision Default Workspace* ➔ *Trigger Analytics Event*).
+- **🔄 Event-Driven State Machines**: Mengolah stream kejadian berurutan (*CDC / Event Sourcing*) yang membutuhkan jaminan eksekusi FIFO per entity ID atau tenant ID.
+- **🏢 SaaS Multi-Tenant Background Jobs**: Menjalankan *background processing* berat dengan isolasi antar tenant tanpa memblokir pemrosesan tenant lain.
 
 ---
 
@@ -94,76 +119,12 @@ stateDiagram-v2
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Contoh Penggunaan
 
-### 1. Jalankan PostgreSQL
+Untuk melihat contoh kode aplikasi lengkap yang mencakup integrasi PostgreSQL, pencatatan log terstruktur (`log/slog`), metrik Prometheus / OpenTelemetry, penanganan error retryable, enkui batch satu transaksi DB, dan propagasi context tracing, silakan kunjungi folder **[example/](example/)**.
 
-```bash
-cd example
-docker compose up -d
-```
-
-### 2. Contoh Penggunaan (`main.go`)
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/semmidev/orderedjob"
-	pgRepo "github.com/semmidev/orderedjob/repository/postgres"
-)
-
-type PaymentPayload struct {
-	AccountID string  `json:"account_id"`
-	Amount    float64 `json:"amount"`
-}
-
-func main() {
-	ctx := context.Background()
-
-	// 1. Inisialisasi DB Pool & Migrasi
-	pool, _ := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/orderedjob?sslmode=disable")
-	repo := pgRepo.New(pool)
-	_ = repo.Migrate(ctx)
-
-	// 2. Buat Engine
-	eng := orderedjob.New(repo,
-		orderedjob.WithConcurrency(10),
-		orderedjob.WithPollInterval(200*time.Millisecond),
-		orderedjob.WithLease(30*time.Second),
-	)
-
-	// 3. Register Type-Safe Handler
-	orderedjob.RegisterTyped(eng, "ProcessPayment", func(ctx context.Context, job orderedjob.Job, payload PaymentPayload) error {
-		fmt.Printf("[worker] chain=%s seq=%d account=%s amount=%.2f trace=%s\n",
-			job.ChainID, job.Sequence, payload.AccountID, payload.Amount, job.TraceID)
-		return nil
-	})
-
-	// 4. Jalankan Worker Pool
-	_ = eng.Start(ctx)
-	defer eng.Shutdown(ctx)
-
-	// 5. Enqueue Job Berurutan
-	ctx = orderedjob.WithTraceID(ctx, "trace-id-12345")
-
-	for seq := int64(1); seq <= 3; seq++ {
-		_, _ = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
-			ChainID:  "acc-8899",
-			Sequence: seq,
-			Type:     "ProcessPayment",
-			Payload:  PaymentPayload{AccountID: "acc-8899", Amount: float64(seq * 100)},
-		})
-	}
-
-	time.Sleep(2 * time.Second)
-}
-```
+- 📖 **[Dokumentasi & Cara Menjalankan Example](example/README.md)**
+- 💻 **[Kode Sumber Aplikasi Percontohan (`example/main.go`)](example/main.go)**
 
 ---
 
