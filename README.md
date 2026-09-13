@@ -1,7 +1,7 @@
 <div align="center">
 
   <h1>⚡ OrderedJob</h1>
-  <p><b>High-Throughput, PostgreSQL-Backed Ordered Job Orchestrator for Go</b></p>
+  <p><b>High-Throughput, PostgreSQL-Backed Ordered Job Engine for Go</b></p>
 
   <p>
     <a href="https://pkg.go.dev/github.com/semmidev/orderedjob"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?style=for-the-badge&logo=go&logoColor=white" alt="GoDoc" /></a>
@@ -12,21 +12,31 @@
   </p>
 
   <p>
-    <code>github.com/semmidev/orderedjob</code> menyediakan <b>strict per-chain FIFO ordering</b> dengan skala throughput tinggi secara konkuransi antar-chain.<br/>PostgreSQL bertindak sebagai <i>single source of truth</i> untuk state management, row locking, event notification stream, dan automatic recovery.
+    <code>github.com/semmidev/orderedjob</code> mengeksekusi job secara berurutan (<b>FIFO per chain</b>) dengan eksekusi paralel antar-chain.<br/>PostgreSQL digunakan sebagai storage engine untuk locking, ordering, retry, dan recovery.
   </p>
 
 </div>
 
-## 🌟 Fitur Utama
+---
 
-- 🔒 **Strict Per-Chain Ordering**: Guaranteed FIFO execution per `chain_id`. Job $N$ tidak akan dieksekusi sebelum Job $N-1$ berstatus `COMPLETED` (C1 Invariant).
-- 🚀 **High-Throughput Parallelism**: Ribuan `chain_id` dapat dieksekusi secara independen dan paralel antar worker tanpa *lock contention*.
-- 🔔 **Instant LISTEN/NOTIFY Event Stream**: Latensi klaim job `< 5ms` menggunakan PostgreSQL push-based notifications tanpa *busy-polling*.
-- 🎯 **Type-Safe Handlers dengan Go Generics**: Daftarkan handler menggunakan `RegisterTyped[T]` dengan unmarshaling JSON otomatis tanpa *boilerplate code*.
-- 🛡️ **Fencing Token (`lease_generation`)**: Mencegah *stale worker* atau *lagging worker* menimpa hasil kerja worker baru (*Fencing Violation Protection*).
-- 🛠️ **Dead Letter Queue (DLQ) & Incident Ops**: API bawaan `ReplayJob` dan `SkipJob` untuk manajemen kegagalan jaringan atau insiden produksi.
-- 🌐 **OpenTelemetry (OTel) Tracing Context**: Integrasi *W3C Trace Context propagation* dari enqueue awal hingga eksekusi asinkron di worker pool.
-- 🔌 **Hexagonal Architecture (Ports & Adapters)**: Tersedia implementasi `postgres` untuk produksi dan `memory` untuk unit testing cepat tanpa database.
+## 📦 Instalasi
+
+```bash
+go get github.com/semmidev/orderedjob
+```
+
+---
+
+## ✨ Fitur Utama
+
+- 🔒 **Per-Chain Ordering**: Job $N$ hanya berjalan setelah Job $N-1$ berstatus `COMPLETED`.
+- 🚀 **Paralelisme Antar Chain**: Ribuan chain berjalan bersamaan secara independen tanpa lock contention.
+- 🔔 **Instant Event Notification**: Menggunakan PostgreSQL `LISTEN/NOTIFY` untuk latensi klaim `< 5ms` tanpa busy-polling.
+- 🎯 **Type-Safe Handlers**: Pendaftaran handler menggunakan Go Generics (`RegisterTyped[T]`) dengan unmarshaling JSON otomatis.
+- 🛡️ **Fencing Protection**: Fencing token (`lease_generation`) mencegah race condition dari worker yang terhambat (*lagging*).
+- 🛠️ **Manajemen DLQ**: Menyediakan API `ReplayJob` dan `SkipJob` untuk memulihkan atau melewati job yang gagal.
+- 🌐 **Distributed Tracing**: Dukungan *TraceContext propagation* (`TraceID`) antar pemanggilan asinkron.
+- 🔌 **In-Memory Adapter**: Adapter `memory` bawaan untuk pengujian cepat tanpa database.
 
 ---
 
@@ -55,7 +65,7 @@ graph TD
 
 ---
 
-## 🚦 State Machine & Transisi Job
+## 🚦 State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -80,22 +90,20 @@ stateDiagram-v2
 ```
 
 > [!IMPORTANT]
-> Hanya status `COMPLETED` yang melepaskan urutan job berikutnya (*sequence N+1*). Status `FAILED`, `CANCELLED`, atau `EXPIRED` akan memblokir chain secara default demi keamanan integritas data.
+> Hanya status `COMPLETED` yang melepaskan urutan job berikutnya (*sequence N+1*). Status `FAILED`, `CANCELLED`, atau `EXPIRED` akan memblokir chain secara default demi keamanan data.
 
 ---
 
-## ⚡ Quick Start
+## 🚀 Quick Start
 
 ### 1. Jalankan PostgreSQL
-
-Gunakan Docker Compose dari folder `example/`:
 
 ```bash
 cd example
 docker compose up -d
 ```
 
-### 2. Kode Aplikasi (`main.go`)
+### 2. Contoh Penggunaan (`main.go`)
 
 ```go
 package main
@@ -117,20 +125,20 @@ type PaymentPayload struct {
 
 func main() {
 	ctx := context.Background()
-	
-	// 1. Inisialisasi Database Pool & Migration
+
+	// 1. Inisialisasi DB Pool & Migrasi
 	pool, _ := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/orderedjob?sslmode=disable")
 	repo := pgRepo.New(pool)
 	_ = repo.Migrate(ctx)
 
-	// 2. Buat Engine & Konfigurasi
+	// 2. Buat Engine
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(10),
 		orderedjob.WithPollInterval(200*time.Millisecond),
 		orderedjob.WithLease(30*time.Second),
 	)
 
-	// 3. Register Type-Safe Handler (Generics)
+	// 3. Register Type-Safe Handler
 	orderedjob.RegisterTyped(eng, "ProcessPayment", func(ctx context.Context, job orderedjob.Job, payload PaymentPayload) error {
 		fmt.Printf("[worker] chain=%s seq=%d account=%s amount=%.2f trace=%s\n",
 			job.ChainID, job.Sequence, payload.AccountID, payload.Amount, job.TraceID)
@@ -141,7 +149,7 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// 5. Enqueue Job Berurutan (Sequential Chain)
+	// 5. Enqueue Job Berurutan
 	ctx = orderedjob.WithTraceID(ctx, "trace-id-12345")
 
 	for seq := int64(1); seq <= 3; seq++ {
@@ -159,19 +167,19 @@ func main() {
 
 ---
 
-## 🛠️ API Management & Incident Operations (DLQ)
+## 🛠️ Penanganan Job Gagal (DLQ Operations)
 
-Ketika sebuah job mengalami kegagalan permanen (`FAILED`), chain tersebut akan terblokir untuk mencegah eksekusi beruntun data yang bermasalah. Anda dapat mengelolanya melalui API berikut:
+Jika sebuah job berstatus `FAILED`, chain akan terhenti sampai ada penanganan manual:
 
-### 1. Replay Job (`ReplayJob`)
-Mengembalikan status job `FAILED` atau `CANCELLED` menjadi `PENDING` agar dapat dicoba kembali oleh worker pool setelah *bugfix* diterapkan:
+### Replay Job
+Mengembalikan job `FAILED` atau `CANCELLED` ke status `PENDING` untuk dicoba ulang:
 
 ```go
 err := eng.ReplayJob(ctx, failedJobID)
 ```
 
-### 2. Skip Job (`SkipJob`)
-Menandai job `FAILED` sebagai `COMPLETED` untuk mengabaikan error dan melanjutkan eksekusi urutan berikutnya pada chain:
+### Skip Job
+Menandai job `FAILED` sebagai `COMPLETED` agar urutan berikutnya dapat dilanjutkan:
 
 ```go
 err := eng.SkipJob(ctx, failedJobID)
@@ -179,22 +187,22 @@ err := eng.SkipJob(ctx, failedJobID)
 
 ---
 
-## ⚙️ Konfigurasi Engine
+## ⚙️ Opsi Konfigurasi Engine
 
 | Option | Deskripsi | Default |
 | :--- | :--- | :--- |
-| `WithConcurrency(n)` | Jumlah worker goroutine eksekusi paralel | `10` |
-| `WithPollInterval(d)` | Interval polling fallback (dilengkapi random jitter) | `500ms` |
-| `WithLease(d)` | Durasi sewa kepemilikan job per worker (heartbeat = lease/3) | `60s` |
-| `WithRetryPolicy(p)` | Strategi backoff retry (`MaxAttempts`, `BaseDelay`, `MaxDelay`, `Jitter`) | `Max 5, Base 1s, Max 5m` |
-| `WithSlogLogger(l)` | Integrasi structured logging (`log/slog`) | `NoopLogger` |
+| `WithConcurrency(n)` | Jumlah worker goroutine | `10` |
+| `WithPollInterval(d)` | Interval polling fallback (dengan random jitter) | `500ms` |
+| `WithLease(d)` | Durasi sewa job per worker (heartbeat = lease/3) | `60s` |
+| `WithRetryPolicy(p)` | Konfigurasi backoff retry (`MaxAttempts`, `BaseDelay`, `MaxDelay`, `Jitter`) | `Max 5, Base 1s, Max 5m` |
+| `WithSlogLogger(l)` | Integrasi `log/slog` | `NoopLogger` |
 | `WithMetrics(m)` | Integrasi Prometheus / OpenTelemetry Metrics | `NoopMetrics` |
 
 ---
 
 ## 🧪 Testing
 
-Library ini menyediakan in-memory repository (`repository/memory`) untuk pengujian tanpa memerlukan instance PostgreSQL:
+Gunakan adapter `memory` untuk unit testing tanpa database:
 
 ```go
 import "github.com/semmidev/orderedjob/repository/memory"
@@ -203,36 +211,11 @@ repo := memory.New()
 eng := orderedjob.New(repo, orderedjob.WithConcurrency(5))
 ```
 
-Jalankan test suite dengan Go Race Detector:
+Menjalankan test dan linter:
 
 ```bash
 make test
-```
-
-Jalankan linter:
-
-```bash
 make lint
-```
-
----
-
-## 📁 Package Layout
-
-```text
-├── engine.go           # Core orchestrator, worker loops, claim & heartbeat
-├── repository.go       # Repository Port interface
-├── handler.go          # Handler Registry & Generic Type-Safe Register helpers
-├── observability.go    # Logger, Metrics interface & TraceID context propagation
-├── job.go              # Job & EnqueueRequest domain models
-├── errors.go           # Domain errors & Retryable/NonRetryable error wrappers
-├── repository/
-│   ├── postgres/       # PostgreSQL adapter (LISTEN/NOTIFY, SKIP LOCKED, Migrations)
-│   └── memory/         # In-memory adapter (Mutex & Maps untuk Unit Testing)
-├── retry/              # Retry Policy & Exponential Backoff Jitter
-├── lease/              # Lease & Heartbeat Duration Manager
-├── lifecycle/          # State machine constants & transition rules
-└── example/            # Sample runnable application + Docker Compose
 ```
 
 ---
