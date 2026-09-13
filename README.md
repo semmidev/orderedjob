@@ -57,6 +57,7 @@ go get github.com/semmidev/orderedjob
 
 ## 💡 Contoh Usecase
 
+- **✅ Multi-Stage Approval Workflow**: Memproses alur persetujuan bertahap (*Approve A* ➔ *Approve B* ➔ ... ➔ *Approve E*) secara sekuensial per dokumen/permohonan dengan pengiriman API inter-service otomatis.
 - **💳 Pipeline Transaksi Finansial**: Menjamin siklus pembayaran (*Validate Account* ➔ *Hold Balance* ➔ *Transfer* ➔ *Send Receipt*) berjalan tepat berurutan per akun tanpa race condition.
 - **📦 Pemrosesan Pesanan E-Commerce**: Memproses tahapan pesanan (*Create Order* ➔ *Deduct Inventory* ➔ *Generate Invoice* ➔ *Ship Package*) sesuai urutan per pesanan.
 - **👤 User Onboarding Workflow**: Eksekusi berurutan untuk registrasi pengguna (*Create User* ➔ *Send Verification Email* ➔ *Provision Default Workspace* ➔ *Trigger Analytics Event*).
