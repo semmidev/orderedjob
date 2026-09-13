@@ -63,6 +63,25 @@ func setupTestMSSQL(t *testing.T, ctx context.Context) (*sql.DB, func()) {
 	db, err := sql.Open("mssql", connStr)
 	require.NoError(t, err)
 
+	// SQL Server container might report readiness log before SA user credentials
+	// initialization finishes internally. Retry PingContext until connection/login succeeds.
+	var pingErr error
+	for i := 0; i < 30; i++ {
+		pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
+		pingErr = db.PingContext(pingCtx)
+		pingCancel()
+		if pingErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if pingErr != nil {
+		t.Skipf("skipping mssql test: unable to connect or login to SQL Server container: %v", pingErr)
+		_ = db.Close()
+		_ = container.Terminate(ctx)
+		return nil, func() {}
+	}
+
 	cleanup := func() {
 		_ = db.Close()
 		_ = container.Terminate(ctx)
