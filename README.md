@@ -1,7 +1,7 @@
 <div align="center">
 
   <h1>⚡ OrderedJob</h1>
-  <p><b>High-Throughput, PostgreSQL-Backed Ordered Job Engine for Go</b></p>
+  <p><b>High-Throughput, Pluggable Multi-Database Ordered Job Engine for Go</b></p>
 
   <p>
     <a href="https://pkg.go.dev/github.com/semmidev/orderedjob"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?style=for-the-badge&logo=go&logoColor=white" alt="GoDoc" /></a>
@@ -9,10 +9,11 @@
     <a href="https://github.com/semmidev/orderedjob/actions"><img src="https://img.shields.io/github/actions/workflow/status/semmidev/orderedjob/ci.yml?branch=main&label=CI&style=for-the-badge&logo=github-actions" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" /></a>
     <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-13%2B-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" /></a>
+    <a href="https://www.microsoft.com/sql-server/"><img src="https://img.shields.io/badge/SQL_Server-2019%2B-CC292B?style=for-the-badge&logo=microsoftsqlserver&logoColor=white" alt="SQL Server" /></a>
   </p>
 
   <p>
-    <code>github.com/semmidev/orderedjob</code> mengeksekusi job secara berurutan (<b>FIFO per chain</b>) dengan eksekusi paralel antar-chain.<br/>PostgreSQL digunakan sebagai storage engine untuk locking, ordering, retry, dan recovery.
+    <code>github.com/semmidev/orderedjob</code> mengeksekusi job secara berurutan (<b>FIFO per chain</b>) dengan eksekusi paralel antar-chain.<br/>Storage engine terdistribusi digunakan untuk locking, ordering, retry, dan recovery secara aman.
   </p>
 
 </div>
@@ -23,6 +24,7 @@
 
 - [📦 Instalasi](#-instalasi)
 - [✨ Fitur Utama](#-fitur-utama)
+- [🗄️ Dukungan Database](#️-dukungan-database)
 - [💡 Contoh Usecase](#-contoh-usecase)
 - [🏗️ Arsitektur](#️-arsitektur)
 - [🚦 State Machine](#-state-machine)
@@ -46,13 +48,25 @@ go get github.com/semmidev/orderedjob
 
 - 🔒 **Per-Chain Ordering**: Job $N$ hanya berjalan setelah Job $N-1$ berstatus `COMPLETED`.
 - 🚀 **Paralelisme Antar Chain**: Ribuan chain berjalan bersamaan secara independen tanpa lock contention.
-- 🔔 **Instant Event Notification**: Menggunakan PostgreSQL `LISTEN/NOTIFY` untuk latensi klaim `< 5ms` tanpa busy-polling.
+- 🗄️ **Multi-Database Support**: Dukungan penuh persistence engine untuk **PostgreSQL** dan **Microsoft SQL Server**.
+- 🔔 **Instant Event Notification**: Menggunakan PostgreSQL `LISTEN/NOTIFY` (atau polling interval ber-jitter) untuk latensi klaim `< 5ms`.
 - 🎯 **Type-Safe Handlers**: Pendaftaran handler menggunakan Go Generics (`RegisterTyped[T]`) dengan unmarshaling JSON otomatis.
 - 🛡️ **Fencing Protection**: Fencing token (`lease_generation`) mencegah race condition dari worker yang terhambat (*lagging*).
 - 🛠️ **Manajemen DLQ**: Menyediakan API `ReplayJob` dan `SkipJob` untuk memulihkan atau melewati job yang gagal.
 - 🌐 **Distributed Tracing**: Dukungan *TraceContext propagation* (`TraceID`) antar pemanggilan asinkron.
-- 🗄️ **Multi-Database Support**: Dukungan penuh persistence engine untuk **PostgreSQL** (`pgxpool`) dan **Microsoft SQL Server** (T-SQL `UPDLOCK, READPAST`).
 - 🔌 **In-Memory Adapter**: Adapter `memory` bawaan untuk pengujian cepat tanpa database.
+
+---
+
+## 🗄️ Dukungan Database
+
+`orderedjob` menyediakan arsitektur storage engine yang *pluggable*. Anda dapat memilih adapter database yang sesuai dengan infrastruktur stack aplikasi Anda:
+
+| Database Engine | Package Path | Driver / Client | Fitur Penguncian & Koordinasi | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **PostgreSQL** | [`repository/postgres`](repository/postgres) | [`pgxpool.Pool`](https://github.com/jackc/pgx) | `FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`, Advisory Lock | GA (Production Ready) |
+| **Microsoft SQL Server** | [`repository/sqlserver`](repository/sqlserver) | [`*sql.DB`](https://github.com/microsoft/go-mssqldb) | `WITH (UPDLOCK, READPAST)`, `sp_getapplock`, `OUTPUT` Clause | GA (Production Ready) |
+| **In-Memory** | [`repository/memory`](repository/memory) | In-Memory Struct | Mutex Locking (Tanpa Database) | Testing / Local Dev |
 
 ---
 
@@ -73,18 +87,18 @@ go get github.com/semmidev/orderedjob
 
 ```mermaid
 graph TD
-    Client["Client App / Service"] -->|"Enqueue(req)"| DB[("PostgreSQL\n(ordered_jobs)")]
+    Client["Client App / Service"] -->|"Enqueue(req)"| DB[("Storage Database\n(PostgreSQL / SQL Server)")]
     
     subgraph Engine["OrderedJob Engine"]
-        Listen["LISTEN Stream\n(< 5ms Latency)"]
-        Scanner["SKIP LOCKED Scanner\n(Partial Index)"]
+        Listen["Event Stream / Poller\n(< 5ms Latency)"]
+        Scanner["SKIP LOCKED / READPAST Scanner\n(Partial Index)"]
         WorkerPool["Worker Pool\n(Goroutines)"]
         Registry["Handler Registry\n(Type-Safe Generics)"]
         Recovery["Recovery Worker\n(Stale Lease Recovery)"]
     end
 
-    DB -->|"pg_notify"| Listen
-    DB -->|"FOR UPDATE SKIP LOCKED"| Scanner
+    DB -->|"Event / Poll"| Listen
+    DB -->|"SKIP LOCKED / UPDLOCK"| Scanner
     Listen -->|"Wakeup Event"| WorkerPool
     Scanner -->|"Claim Job"| WorkerPool
     Recovery -->|"Reclaim Stale Jobs"| DB
@@ -131,7 +145,7 @@ stateDiagram-v2
 
 ## 🚀 Contoh Penggunaan
 
-Untuk melihat contoh kode aplikasi lengkap yang mencakup integrasi PostgreSQL, pencatatan log terstruktur (`log/slog`), metrik Prometheus / OpenTelemetry, penanganan error retryable, enkui batch satu transaksi DB, dan propagasi context tracing, silakan kunjungi folder **[example/](example/)**.
+Untuk melihat contoh kode aplikasi lengkap yang mencakup integrasi database, pencatatan log terstruktur (`log/slog`), metrik Prometheus / OpenTelemetry, penanganan error retryable, enkui batch satu transaksi DB, dan propagasi context tracing, silakan kunjungi folder **[example/](example/)**.
 
 - 📖 **[Dokumentasi & Cara Menjalankan Example](example/README.md)**
 - 💻 **[Kode Sumber Aplikasi Percontohan (`example/main.go`)](example/main.go)**
