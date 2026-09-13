@@ -67,6 +67,8 @@ go get github.com/semmidev/orderedjob
 
 ## 🏗️ Arsitektur
 
+<div align="center">
+
 ```mermaid
 graph TD
     Client["Client App / Service"] -->|"Enqueue(req)"| DB[("PostgreSQL\n(ordered_jobs)")]
@@ -88,9 +90,13 @@ graph TD
     Registry -->|"Side Effects / Actions"| External["External Systems / APIs"]
 ```
 
+</div>
+
 ---
 
 ## 🚦 State Machine
+
+<div align="center">
 
 ```mermaid
 stateDiagram-v2
@@ -113,6 +119,8 @@ stateDiagram-v2
     CANCELLED --> [*]
     DEAD_LETTERED --> [*]
 ```
+
+</div>
 
 > [!IMPORTANT]
 > Hanya status `COMPLETED` yang melepaskan urutan job berikutnya (*sequence N+1*). Status `FAILED`, `CANCELLED`, atau `EXPIRED` akan memblokir chain secara default demi keamanan data.
