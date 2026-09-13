@@ -28,7 +28,7 @@ type NotificationPayload struct {
 	Message   string `json:"message"`
 }
 
-// CustomMetrics demonstrates implementing orderedjob.Metrics for Prometheus/OpenTelemetry integration.
+// CustomMetrics demonstrates implementing orderedjob.Metrics following Prometheus & OpenTelemetry conventions.
 type CustomMetrics struct {
 	Claimed       atomic.Int64
 	Completed     atomic.Int64
@@ -38,34 +38,62 @@ type CustomMetrics struct {
 	Conflicts     atomic.Int64
 	ActiveLeases  atomic.Int64
 	BlockedChains atomic.Int64
+	TotalExecNs   atomic.Int64
+	ExecCount     atomic.Int64
 }
 
-func (m *CustomMetrics) IncClaimed()                          { m.Claimed.Add(1) }
-func (m *CustomMetrics) IncCompleted(jobType string)          { m.Completed.Add(1) }
-func (m *CustomMetrics) IncFailed(jobType string)             { m.Failed.Add(1) }
-func (m *CustomMetrics) IncRetry(jobType string)              { m.Retries.Add(1) }
+// Prometheus counterpart: orderedjob_jobs_claimed_total (Counter)
+func (m *CustomMetrics) IncClaimed() { m.Claimed.Add(1) }
+
+// Prometheus counterpart: orderedjob_jobs_completed_total{job_type="..."} (Counter)
+func (m *CustomMetrics) IncCompleted(jobType string) { m.Completed.Add(1) }
+
+// Prometheus counterpart: orderedjob_jobs_failed_total{job_type="..."} (Counter)
+func (m *CustomMetrics) IncFailed(jobType string) { m.Failed.Add(1) }
+
+// Prometheus counterpart: orderedjob_job_retries_total{job_type="..."} (Counter)
+func (m *CustomMetrics) IncRetry(jobType string) { m.Retries.Add(1) }
+
+// Prometheus counterpart: orderedjob_job_execution_duration_seconds{job_type="..."} (Histogram)
 func (m *CustomMetrics) ObserveExecDuration(jobType string, d time.Duration) {
-	// In production, export 'd' to Prometheus histogram (e.g. orderedjob_exec_duration_seconds)
+	m.TotalExecNs.Add(d.Nanoseconds())
+	m.ExecCount.Add(1)
 }
+
+// Prometheus counterpart: orderedjob_job_queue_delay_seconds{job_type="..."} (Histogram)
 func (m *CustomMetrics) ObserveQueueDelay(jobType string, d time.Duration) {
-	// In production, export 'd' to Prometheus histogram (e.g. orderedjob_queue_delay_seconds)
+	// Map to prometheus.HistogramVec observer in production
 }
-func (m *CustomMetrics) SetActiveLeases(n int)     { m.ActiveLeases.Store(int64(n)) }
-func (m *CustomMetrics) IncClaimConflicts()        { m.Conflicts.Add(1) }
-func (m *CustomMetrics) IncStaleRecovered(n int)   { m.Recovered.Add(int64(n)) }
-func (m *CustomMetrics) IncBlockedChain()          { m.BlockedChains.Add(1) }
+
+// Prometheus counterpart: orderedjob_active_leases (Gauge)
+func (m *CustomMetrics) SetActiveLeases(n int) { m.ActiveLeases.Store(int64(n)) }
+
+// Prometheus counterpart: orderedjob_claim_conflicts_total (Counter)
+func (m *CustomMetrics) IncClaimConflicts() { m.Conflicts.Add(1) }
+
+// Prometheus counterpart: orderedjob_stale_recovered_total (Counter)
+func (m *CustomMetrics) IncStaleRecovered(n int) { m.Recovered.Add(int64(n)) }
+
+// Prometheus counterpart: orderedjob_blocked_chains_total (Counter)
+func (m *CustomMetrics) IncBlockedChain() { m.BlockedChains.Add(1) }
 
 func (m *CustomMetrics) PrintSummary() {
-	fmt.Println("\n📊 --- Metrics Summary ---")
-	fmt.Printf("Claimed Jobs     : %d\n", m.Claimed.Load())
-	fmt.Printf("Completed Jobs   : %d\n", m.Completed.Load())
-	fmt.Printf("Failed Jobs      : %d\n", m.Failed.Load())
-	fmt.Printf("Retried Jobs     : %d\n", m.Retries.Load())
-	fmt.Printf("Recovered Jobs   : %d\n", m.Recovered.Load())
-	fmt.Printf("Claim Conflicts  : %d\n", m.Conflicts.Load())
-	fmt.Printf("Blocked Chains   : %d\n", m.BlockedChains.Load())
-	fmt.Printf("Active Leases    : %d\n", m.ActiveLeases.Load())
-	fmt.Println("--------------------------")
+	fmt.Println("\n📊 --- Metrics Summary (Prometheus / OpenTelemetry Standard) ---")
+	fmt.Printf("Claimed Jobs     (orderedjob_jobs_claimed_total)         : %d\n", m.Claimed.Load())
+	fmt.Printf("Completed Jobs   (orderedjob_jobs_completed_total)       : %d\n", m.Completed.Load())
+	fmt.Printf("Failed Jobs      (orderedjob_jobs_failed_total)          : %d\n", m.Failed.Load())
+	fmt.Printf("Retried Jobs     (orderedjob_job_retries_total)          : %d\n", m.Retries.Load())
+	fmt.Printf("Recovered Jobs   (orderedjob_stale_recovered_total)      : %d\n", m.Recovered.Load())
+	fmt.Printf("Claim Conflicts  (orderedjob_claim_conflicts_total)      : %d\n", m.Conflicts.Load())
+	fmt.Printf("Blocked Chains   (orderedjob_blocked_chains_total)       : %d\n", m.BlockedChains.Load())
+	fmt.Printf("Active Leases    (orderedjob_active_leases)              : %d\n", m.ActiveLeases.Load())
+	
+	count := m.ExecCount.Load()
+	if count > 0 {
+		avgMs := float64(m.TotalExecNs.Load()) / float64(count) / 1e6
+		fmt.Printf("Avg Exec Duration(orderedjob_job_execution_duration_sec): %.2f ms (across %d executions)\n", avgMs, count)
+	}
+	fmt.Println("----------------------------------------------------------------")
 }
 
 func main() {
