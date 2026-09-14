@@ -797,13 +797,32 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 		offset = 0
 	}
 
+	orderByCol := "created_at"
+	switch strings.ToLower(filter.OrderBy) {
+	case "sequence":
+		orderByCol = "sequence"
+	case "available_at":
+		orderByCol = "available_at"
+	case "job_type":
+		orderByCol = "job_type"
+	case "status":
+		orderByCol = "status"
+	case "created_at":
+		orderByCol = "created_at"
+	}
+
+	orderDir := "DESC"
+	if strings.EqualFold(filter.OrderDir, "asc") {
+		orderDir = "ASC"
+	}
+
 	dataQuery := fmt.Sprintf(`
 		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
 		FROM ordered_jobs
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY %s %s
 		OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY
-	`, whereStmt, argIdx, argIdx+1)
+	`, whereStmt, orderByCol, orderDir, argIdx, argIdx+1)
 
 	args = append(args, offset, limit)
 
@@ -825,8 +844,52 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 	return jobs, total, nil
 }
 
-func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error) {
-	query := `
+func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilter) ([]orderedjob.ChainSummary, int64, error) {
+	var whereClause string
+	var args []any
+	argIdx := 1
+
+	if filter.Search != "" {
+		whereClause = fmt.Sprintf("WHERE chain_id LIKE @p%d", argIdx)
+		args = append(args, "%"+filter.Search+"%")
+		argIdx++
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(DISTINCT chain_id) FROM ordered_jobs %s", whereClause)
+	var total int64
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	orderByCol := "chain_id"
+	switch strings.ToLower(filter.OrderBy) {
+	case "total_jobs":
+		orderByCol = "total_jobs"
+	case "max_sequence":
+		orderByCol = "max_sequence"
+	case "pending_jobs":
+		orderByCol = "pending_jobs"
+	case "failed_jobs":
+		orderByCol = "failed_jobs"
+	case "chain_id":
+		orderByCol = "chain_id"
+	}
+
+	orderDir := "ASC"
+	if strings.EqualFold(filter.OrderDir, "desc") {
+		orderDir = "DESC"
+	}
+
+	dataQuery := fmt.Sprintf(`
 		SELECT 
 			chain_id,
 			COUNT(*) as total_jobs,
@@ -834,12 +897,17 @@ func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary,
 			SUM(CASE WHEN status IN ('PENDING', 'PROCESSING', 'RETRYING') THEN 1 ELSE 0 END) as pending_jobs,
 			SUM(CASE WHEN status IN ('FAILED', 'DEAD_LETTERED') THEN 1 ELSE 0 END) as failed_jobs
 		FROM ordered_jobs
+		%s
 		GROUP BY chain_id
-		ORDER BY chain_id ASC
-	`
-	rows, err := r.db.QueryContext(ctx, query)
+		ORDER BY %s %s
+		OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY
+	`, whereClause, orderByCol, orderDir, argIdx, argIdx+1)
+
+	args = append(args, offset, limit)
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -847,7 +915,7 @@ func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary,
 	for rows.Next() {
 		var cs orderedjob.ChainSummary
 		if err := rows.Scan(&cs.ChainID, &cs.TotalJobs, &cs.MaxSequence, &cs.PendingJobs, &cs.FailedJobs); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		_ = r.db.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = @p1 AND sequence = @p2", cs.ChainID, cs.MaxSequence).Scan(&cs.LatestStatus)
@@ -855,5 +923,5 @@ func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary,
 		summaries = append(summaries, cs)
 	}
 
-	return summaries, nil
+	return summaries, total, nil
 }

@@ -136,6 +136,8 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	status := q.Get("status")
 	jobType := q.Get("job_type")
 	search := q.Get("search")
+	orderBy := q.Get("order_by")
+	orderDir := q.Get("order_dir")
 
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
@@ -147,12 +149,14 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := orderedjob.JobFilter{
-		ChainID: chainID,
-		Status:  status,
-		JobType: jobType,
-		Search:  search,
-		Offset:  (page - 1) * limit,
-		Limit:   limit,
+		ChainID:  chainID,
+		Status:   status,
+		JobType:  jobType,
+		Search:   search,
+		OrderBy:  orderBy,
+		OrderDir: orderDir,
+		Offset:   (page - 1) * limit,
+		Limit:    limit,
 	}
 
 	jobs, total, err := s.repo.ListJobs(r.Context(), filter)
@@ -239,12 +243,46 @@ func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	chains, err := s.repo.ListChains(r.Context())
+	q := r.URL.Query()
+	search := q.Get("search")
+	orderBy := q.Get("order_by")
+	orderDir := q.Get("order_dir")
+
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit < 1 || limit > 200 {
+		limit = 20
+	}
+
+	filter := orderedjob.ChainFilter{
+		Search:   search,
+		OrderBy:  orderBy,
+		OrderDir: orderDir,
+		Offset:   (page - 1) * limit,
+		Limit:    limit,
+	}
+
+	chains, total, err := s.repo.ListChains(r.Context(), filter)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"chains": chains})
+
+	totalPages := (total + int64(limit) - 1) / int64(limit)
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"chains":      chains,
+		"total":       total,
+		"page":        page,
+		"limit":       limit,
+		"total_pages": totalPages,
+	})
 }
 
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {

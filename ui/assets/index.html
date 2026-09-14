@@ -188,11 +188,19 @@
             <thead>
               <tr class="bg-canvas border-b border-border text-[11px] font-medium text-warm uppercase tracking-wider">
                 <th class="py-3 px-4">Job ID</th>
-                <th class="py-3 px-4">Chain & Seq</th>
-                <th class="py-3 px-4">Job Type</th>
-                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleJobSort('sequence')">
+                  Chain & Seq <span id="sort-icon-job-sequence" class="text-[9px]"></span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleJobSort('job_type')">
+                  Job Type <span id="sort-icon-job-job_type" class="text-[9px]"></span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleJobSort('status')">
+                  Status <span id="sort-icon-job-status" class="text-[9px]"></span>
+                </th>
                 <th class="py-3 px-4">Attempt</th>
-                <th class="py-3 px-4">Created At</th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleJobSort('created_at')">
+                  Created At <span id="sort-icon-job-created_at" class="text-[9px]">▼</span>
+                </th>
                 <th class="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -217,16 +225,37 @@
 
     <!-- TAB 2: CHAINS SUMMARY -->
     <div id="view-chains" class="space-y-4 hidden">
+      <!-- Chains Toolbar -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card border border-border p-3 rounded-xl shadow-seline">
+        <div class="flex-1 flex items-center space-x-3">
+          <input type="text" id="chainSearchInput" oninput="debounceFetchChains()" placeholder="Search Chain ID..."
+                 class="w-full sm:max-w-md bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
+        </div>
+        <button onclick="fetchData()" class="bg-card hover:bg-canvas border border-border text-warm hover:text-ink text-xs px-3 py-2 rounded-lg shadow-subtle transition-all flex items-center justify-center space-x-1">
+          <span>🔄 Refresh</span>
+        </button>
+      </div>
+
       <div class="bg-card border border-border rounded-xl shadow-seline overflow-hidden">
         <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse">
             <thead>
               <tr class="bg-canvas border-b border-border text-[11px] font-medium text-warm uppercase tracking-wider">
-                <th class="py-3 px-4">Chain ID</th>
-                <th class="py-3 px-4">Total Jobs</th>
-                <th class="py-3 px-4">Max Sequence</th>
-                <th class="py-3 px-4">Active / Pending</th>
-                <th class="py-3 px-4">Failed Jobs</th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleChainSort('chain_id')">
+                  Chain ID <span id="sort-icon-chain-chain_id" class="text-[9px]">▲</span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleChainSort('total_jobs')">
+                  Total Jobs <span id="sort-icon-chain-total_jobs" class="text-[9px]"></span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleChainSort('max_sequence')">
+                  Max Sequence <span id="sort-icon-chain-max_sequence" class="text-[9px]"></span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleChainSort('pending_jobs')">
+                  Active / Pending <span id="sort-icon-chain-pending_jobs" class="text-[9px]"></span>
+                </th>
+                <th class="py-3 px-4 cursor-pointer hover:bg-border/40 transition-colors select-none" onclick="toggleChainSort('failed_jobs')">
+                  Failed Jobs <span id="sort-icon-chain-failed_jobs" class="text-[9px]"></span>
+                </th>
                 <th class="py-3 px-4">Latest Status</th>
               </tr>
             </thead>
@@ -236,6 +265,15 @@
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Chains Pagination Bar -->
+        <div class="bg-canvas border-t border-border px-4 py-3 flex items-center justify-between text-xs text-warm">
+          <div id="chainPaginationInfo">Showing 0 of 0 chains</div>
+          <div class="flex space-x-2" id="chainPaginationButtons">
+            <button id="btnChainPrev" onclick="changeChainPage(-1)" class="px-3 py-1 bg-card border border-border rounded-md text-ink disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+            <button id="btnChainNext" onclick="changeChainPage(1)" class="px-3 py-1 bg-card border border-border rounded-md text-ink disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+          </div>
         </div>
       </div>
     </div>
@@ -363,6 +401,14 @@
   <script>
     let currentPage = 1;
     let currentLimit = 20;
+    let jobOrderBy = 'created_at';
+    let jobOrderDir = 'desc';
+
+    let chainCurrentPage = 1;
+    let chainCurrentLimit = 20;
+    let chainOrderBy = 'chain_id';
+    let chainOrderDir = 'asc';
+
     let refreshTimer = null;
     let activeTab = 'jobs';
     let currentDetailID = null;
@@ -392,8 +438,60 @@
       if (activeTab === 'jobs') {
         fetchJobs(currentPage);
       } else if (activeTab === 'chains') {
-        fetchChains();
+        fetchChains(chainCurrentPage);
       }
+    }
+
+    function toggleJobSort(col) {
+      if (jobOrderBy === col) {
+        jobOrderDir = jobOrderDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        jobOrderBy = col;
+        jobOrderDir = col === 'created_at' ? 'desc' : 'asc';
+      }
+      updateJobSortIcons();
+      fetchJobs(1);
+    }
+
+    function updateJobSortIcons() {
+      ['sequence', 'job_type', 'status', 'created_at'].forEach(col => {
+        const iconEl = document.getElementById(`sort-icon-job-${col}`);
+        if (!iconEl) return;
+        if (jobOrderBy === col) {
+          iconEl.innerText = jobOrderDir === 'asc' ? '▲' : '▼';
+        } else {
+          iconEl.innerText = '';
+        }
+      });
+    }
+
+    function toggleChainSort(col) {
+      if (chainOrderBy === col) {
+        chainOrderDir = chainOrderDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        chainOrderBy = col;
+        chainOrderDir = 'asc';
+      }
+      updateChainSortIcons();
+      fetchChains(1);
+    }
+
+    function updateChainSortIcons() {
+      ['chain_id', 'total_jobs', 'max_sequence', 'pending_jobs', 'failed_jobs'].forEach(col => {
+        const iconEl = document.getElementById(`sort-icon-chain-${col}`);
+        if (!iconEl) return;
+        if (chainOrderBy === col) {
+          iconEl.innerText = chainOrderDir === 'asc' ? '▲' : '▼';
+        } else {
+          iconEl.innerText = '';
+        }
+      });
+    }
+
+    let chainSearchTimeout = null;
+    function debounceFetchChains() {
+      clearTimeout(chainSearchTimeout);
+      chainSearchTimeout = setTimeout(() => fetchChains(1), 300);
     }
 
     function fetchStats() {
@@ -433,7 +531,9 @@
         limit: currentLimit,
         status: status,
         chain_id: chain,
-        search: search
+        search: search,
+        order_by: jobOrderBy,
+        order_dir: jobOrderDir
       });
 
       fetch(rootAPI + '/jobs?' + params.toString())
@@ -488,15 +588,41 @@
       return btns;
     }
 
-    function fetchChains() {
-      fetch(rootAPI + '/chains')
+    function fetchChains(page = 1) {
+      chainCurrentPage = page;
+      const searchInput = document.getElementById('chainSearchInput');
+      const search = searchInput ? searchInput.value.trim() : '';
+
+      const params = new URLSearchParams({
+        page: page,
+        limit: chainCurrentLimit,
+        search: search,
+        order_by: chainOrderBy,
+        order_dir: chainOrderDir
+      });
+
+      fetch(rootAPI + '/chains?' + params.toString())
         .then(res => res.json())
         .then(data => {
           allChainsList = data.chains || [];
           renderChainsTable(allChainsList);
+          renderChainPagination(data.page, data.total_pages, data.total);
           renderChainDropdown(allChainsList, document.getElementById('chainFilterInput').value);
         })
         .catch(err => console.error('Error fetching chains:', err));
+    }
+
+    function renderChainPagination(page, totalPages, total) {
+      const info = document.getElementById('chainPaginationInfo');
+      if (info) info.innerText = `Showing page ${page} of ${totalPages || 1} (${total || 0} total chains)`;
+      const prev = document.getElementById('btnChainPrev');
+      if (prev) prev.disabled = (page <= 1);
+      const next = document.getElementById('btnChainNext');
+      if (next) next.disabled = (page >= totalPages);
+    }
+
+    function changeChainPage(delta) {
+      fetchChains(chainCurrentPage + delta);
     }
 
     function renderChainsTable(chains) {

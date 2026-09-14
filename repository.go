@@ -50,7 +50,7 @@ type Repository interface {
 	// Inspection & Dashboard Methods
 	GetStats(ctx context.Context) (Stats, error)
 	ListJobs(ctx context.Context, filter JobFilter) ([]Job, int64, error)
-	ListChains(ctx context.Context) ([]ChainSummary, error)
+	ListChains(ctx context.Context, filter ChainFilter) ([]ChainSummary, int64, error)
 
 	// Real-time LISTEN/NOTIFY interface
 	NotifyChannel() string
@@ -58,12 +58,22 @@ type Repository interface {
 }
 
 type JobFilter struct {
-	ChainID string
-	Status  string
-	JobType string
-	Search  string
-	Offset  int
-	Limit   int
+	ChainID  string
+	Status   string
+	JobType  string
+	Search   string
+	OrderBy  string
+	OrderDir string
+	Offset   int
+	Limit    int
+}
+
+type ChainFilter struct {
+	Search   string
+	OrderBy  string
+	OrderDir string
+	Offset   int
+	Limit    int
 }
 
 type Stats struct {

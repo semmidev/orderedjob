@@ -94,12 +94,19 @@ func TestUIHandler_Endpoints(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		var resp map[string][]orderedjob.ChainSummary
+		var resp struct {
+			Chains     []orderedjob.ChainSummary `json:"chains"`
+			Total      int64                     `json:"total"`
+			Page       int                       `json:"page"`
+			Limit      int                       `json:"limit"`
+			TotalPages int64                     `json:"total_pages"`
+		}
 		err := json.NewDecoder(rec.Body).Decode(&resp)
 		require.NoError(t, err)
-		require.Len(t, resp["chains"], 1)
-		assert.Equal(t, "chain-ui-1", resp["chains"][0].ChainID)
-		assert.Equal(t, int64(2), resp["chains"][0].TotalJobs)
+		require.Len(t, resp.Chains, 1)
+		assert.Equal(t, "chain-ui-1", resp.Chains[0].ChainID)
+		assert.Equal(t, int64(2), resp.Chains[0].TotalJobs)
+		assert.Equal(t, int64(1), resp.Total)
 	})
 
 	t.Run("POST /ui/api/enqueue", func(t *testing.T) {

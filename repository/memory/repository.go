@@ -566,8 +566,25 @@ func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]ord
 		matched = append(matched, j)
 	}
 
+	isAsc := strings.EqualFold(filter.OrderDir, "ASC")
 	sort.Slice(matched, func(i, j int) bool {
-		return matched[i].CreatedAt.After(matched[j].CreatedAt)
+		var less bool
+		switch strings.ToLower(filter.OrderBy) {
+		case "sequence":
+			less = matched[i].Sequence < matched[j].Sequence
+		case "job_type":
+			less = matched[i].Type < matched[j].Type
+		case "status":
+			less = matched[i].Status < matched[j].Status
+		case "available_at":
+			less = matched[i].AvailableAt.Before(matched[j].AvailableAt)
+		default: // created_at
+			less = matched[i].CreatedAt.Before(matched[j].CreatedAt)
+		}
+		if isAsc {
+			return less
+		}
+		return !less
 	})
 
 	total := int64(len(matched))
@@ -583,12 +600,18 @@ func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]ord
 	return matched[filter.Offset:end], total, nil
 }
 
-func (r *repo) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error) {
+func (r *repo) ListChains(ctx context.Context, filter orderedjob.ChainFilter) ([]orderedjob.ChainSummary, int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	search := strings.ToLower(filter.Search)
 	var summaries []orderedjob.ChainSummary
+
 	for chainID, m := range r.chain {
+		if search != "" && !strings.Contains(strings.ToLower(chainID), search) {
+			continue
+		}
+
 		var cs orderedjob.ChainSummary
 		cs.ChainID = chainID
 		cs.TotalJobs = int64(len(m))
@@ -613,9 +636,40 @@ func (r *repo) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error
 		summaries = append(summaries, cs)
 	}
 
+	isAsc := strings.EqualFold(filter.OrderDir, "ASC")
+	if filter.OrderDir == "" {
+		isAsc = true
+	}
+
 	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].ChainID < summaries[j].ChainID
+		var less bool
+		switch strings.ToLower(filter.OrderBy) {
+		case "total_jobs":
+			less = summaries[i].TotalJobs < summaries[j].TotalJobs
+		case "max_sequence":
+			less = summaries[i].MaxSequence < summaries[j].MaxSequence
+		case "pending_jobs":
+			less = summaries[i].PendingJobs < summaries[j].PendingJobs
+		case "failed_jobs":
+			less = summaries[i].FailedJobs < summaries[j].FailedJobs
+		default: // chain_id
+			less = summaries[i].ChainID < summaries[j].ChainID
+		}
+		if isAsc {
+			return less
+		}
+		return !less
 	})
 
-	return summaries, nil
+	total := int64(len(summaries))
+	if filter.Offset >= len(summaries) {
+		return []orderedjob.ChainSummary{}, total, nil
+	}
+
+	end := filter.Offset + filter.Limit
+	if filter.Limit <= 0 || end > len(summaries) {
+		end = len(summaries)
+	}
+
+	return summaries[filter.Offset:end], total, nil
 }
