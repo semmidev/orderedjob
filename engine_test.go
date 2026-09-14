@@ -382,10 +382,11 @@ func TestEngine_OrderingMode_SkipOnFailure(t *testing.T) {
 		t.Fatal("Job 2 failed to execute after Job 1 failed under skip-on-failure mode")
 	}
 
-	j1Fetched, _ := eng.Get(ctx, j1.ID)
-	j2Fetched, _ := eng.Get(ctx, j2.ID)
-	assert.Equal(t, "FAILED", j1Fetched.Status)
-	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+	assert.Eventually(t, func() bool {
+		j1Fetched, err1 := eng.Get(ctx, j1.ID)
+		j2Fetched, err2 := eng.Get(ctx, j2.ID)
+		return err1 == nil && err2 == nil && j1Fetched.Status == "FAILED" && j2Fetched.Status == "COMPLETED"
+	}, 2*time.Second, 10*time.Millisecond, "expected Job 1 FAILED and Job 2 COMPLETED")
 }
 
 func TestEngine_OrderingMode_DeadLetterAndContinue(t *testing.T) {
@@ -426,10 +427,11 @@ func TestEngine_OrderingMode_DeadLetterAndContinue(t *testing.T) {
 		t.Fatal("Job 2 failed to execute under dead-letter-and-continue mode")
 	}
 
-	j1Fetched, _ := eng.Get(ctx, j1.ID)
-	j2Fetched, _ := eng.Get(ctx, j2.ID)
-	assert.Equal(t, "DEAD_LETTERED", j1Fetched.Status)
-	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+	assert.Eventually(t, func() bool {
+		j1Fetched, err1 := eng.Get(ctx, j1.ID)
+		j2Fetched, err2 := eng.Get(ctx, j2.ID)
+		return err1 == nil && err2 == nil && j1Fetched.Status == "DEAD_LETTERED" && j2Fetched.Status == "COMPLETED"
+	}, 2*time.Second, 10*time.Millisecond, "expected Job 1 DEAD_LETTERED and Job 2 COMPLETED")
 }
 
 func TestEngine_OrderingStrategyResolver(t *testing.T) {
@@ -477,8 +479,10 @@ func TestEngine_OrderingStrategyResolver(t *testing.T) {
 		t.Fatal("Job 2 failed to execute when Job 1 resolved to skip-on-failure via resolver strategy")
 	}
 
-	j2Fetched, _ := eng.Get(ctx, j2.ID)
-	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+	assert.Eventually(t, func() bool {
+		j2Fetched, err := eng.Get(ctx, j2.ID)
+		return err == nil && j2Fetched.Status == "COMPLETED"
+	}, 2*time.Second, 10*time.Millisecond, "expected Job 2 COMPLETED")
 }
 
 func TestEngine_ScheduledAndDelayedJobs(t *testing.T) {
