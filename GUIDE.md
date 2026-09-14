@@ -1,13 +1,12 @@
 # 📖 Panduan Lengkap & Cetak Biru Fitur (`GUIDE.md`)
 
-Selamat datang di panduan resmi penggunaan **`orderedjob`**. Dokumen ini dirancang sebagai panduan komprehensif dari tingkat dasar (*basic*) hingga tingkat mahir (*enterprise advanced*). 
-
-Setiap skenario dilengkapi dengan **penjelasan fungsi**, **opsi konfigurasi**, **efek samping (*side effects*)**, serta **contoh kode Go lengkap** (````go````).
+Selamat datang di panduan resmi penggunaan **`orderedjob`**. Dokumen ini dirancang sebagai referensi komprehensif yang menjelaskan **setiap opsi konfigurasi, parameter API, fungsi, efek samping (*side effects*)**, serta skenario penggunaan dari tingkat paling dasar (*basic*) hingga tingkat mahir (*enterprise advanced*).
 
 ---
 
-## 📌 Daftar Isi Skrip & Skenario
+## 📌 Daftar Isi
 
+- [🗂️ Kamus Referensi Opsi Engine & API Parameter](#️-kamus-referensi-opsi-engine--api-parameter)
 - [1. Skenario 1: Dasar & In-Memory Quickstart](#1-skenario-1-dasar--in-memory-quickstart)
 - [2. Skenario 2: Auto-Sequence & Multi-Step Ordering](#2-skenario-2-auto-sequence--multi-step-ordering)
 - [3. Skenario 3: Multi-Database Production Engine (PostgreSQL & SQL Server)](#3-skenario-3-multi-database-production-engine-postgresql--sql-server)
@@ -24,20 +23,85 @@ Setiap skenario dilengkapi dengan **penjelasan fungsi**, **opsi konfigurasi**, *
 
 ---
 
+## 🗂️ Kamus Referensi Opsi Engine & API Parameter
+
+### ⚙️ Matriks Opsi Engine (`orderedjob.Option`)
+
+Tabel berikut menjelaskan seluruh 19 parameter konfigurasi `orderedjob.Option` yang tersedia saat menginisialisasi engine via `orderedjob.New(repo, opts...)`:
+
+| Opsi Konfigurasi | Tipe Data | Nilai Default | Deskripsi & Fungsi Utama | Efek Samping (*Side Effects*) & Pertimbangan Performa |
+| :--- | :--- | :--- | :--- | :--- |
+| **`WithConcurrency(n)`** | `int` | `10` | Menentukan jumlah worker goroutine yang berjalan secara simultan memproses pekerjaan. | Nilai lebih tinggi meningkatkan throughput eksekusi antar-chain, namun memakai lebih banyak memory & koneksi database pool. |
+| **`WithPollInterval(d)`** | `time.Duration` | `500ms` | Interval perulangan polling periodik worker scanner saat mencari job yang siap diklaim. | Nilai lebih kecil (misal `10ms`) mempercepat respon klaim fallback, namun meningkatkan jumlah query `SELECT` saat antrean kosong jika `WithNotify` tidak aktif. |
+| **`WithLease(d)`** | `time.Duration` | `60s` | Durasi sewa (*lease duration*) eksklusif yang diberikan kepada worker saat mengklaim suatu job. | Heartbeat goroutine internal memperpanjang lease ini setiap `d / 3`. Jika worker mati mendadak, job baru bisa di-reclaim setelah durasi `d` kadaluarsa. |
+| **`WithRecoveryInterval(d)`** | `time.Duration` | `10s` | Interval pengujian rutin worker pemulihan (*Stale Lease Recovery*) untuk memindai job menggantung akibat worker crash. | Memindai job `PROCESSING` dengan `lease_until < NOW()`. Nilai lebih kecil mempercepat pemulihan job pasca crash. |
+| **`WithWorkerID(id)`** | `string` | `worker-<uuid>` | Identifikasi unik instance worker engine ini dalam kluster terdistribusi. | Dicatat pada kolom `worker_id` di database untuk audit jejak eksekusi dan verifikasi *fencing token* (`lease_generation`). |
+| **`WithNotify(enabled)`** | `bool` | `false` | Mengaktifkan listener terstruktur sinyal PostgreSQL `LISTEN/NOTIFY`. | Mengabaikan keterlambatan polling periodik saat job baru di-enqueue, menghasilkan latensi klaim instan `< 5ms`. Membutuhkan 1 koneksi DB pgx dedicated. |
+| **`WithRetryPolicy(p)`** | `retry.Policy` | `Max 5, Base 1s, Max 5m` | Kebijakan percobaan ulang (*exponential backoff + jitter*) untuk eror transien (`orderedjob.Retryable`). | Job yang gagal sementara akan di-retry hingga `MaxAttempts` sebelum dipindahkan ke status `FAILED` / DLQ. |
+| **`WithOrderingMode(mode)`** | `string` | `"strict"` | Mode urutan global engine (`"strict"`, `"skip-on-failure"`, `"dead-letter-and-continue"`). | Menentukan apakah kegagalan job memblokir urutan berikutnya (`Sequence N+1`) atau melewatinya secara otomatis. |
+| **`WithOrderingStrategy(s)`** | `OrderingStrategyResolver` | `nil` | Resolver fungsi dinamis untuk memilih mode urutan per request `EnqueueRequest`. | Meng-override `WithOrderingMode` global secara dinamis berdasarkan `job_type`, `tenant_id`, atau atribut request. |
+| **`WithPanicHandler(h)`** | `PanicHandler` | `nil` | Interceptor kustom saat handler goroutine mengalami *unhandled runtime panic*. | Menangkap panic value dan stack trace mentah tanpa mematikan worker pool atau aplikasi utama. |
+| **`WithRetryOnPanic(retry)`** | `bool` | `false` | Menentukan apakah panic pada handler wajib di-retry sesuai Retry Policy. | Jika `true`, panic dianggap eror transien dan di-retry. Jika `false` (default), panic langsung mengubah status job ke `FAILED`. |
+| **`WithMetrics(m)`** | `Metrics` | `NoopMetrics` | Collector metrik OpenTelemetry / Prometheus (`NewOTelMetrics`). | Mencatat durasi eksekusi, queue delay, counter job completed/failed/panics/stale. Overhead atomic memori sangat kecil. |
+| **`WithLogger(l)`** | `Logger` | `NoopLogger` | Interface logger internal pustaka `orderedjob`. | Mencatat aktivitas klaim, recovery, dan error internal engine. |
+| **`WithSlogLogger(l)`** | `*slog.Logger` | `nil` | Adapter integrasi terstruktur `log/slog` standar Go 1.21+. | Menghasilkan log berformat JSON/Text terstruktur dengan level log terpadu. |
+| **`WithTracer(t)`** | `trace.Tracer` | OTel Global | Tracer OpenTelemetry untuk distributed tracing terdistribusi. | Meneruskan `traceparent` W3C TraceContext dari enkui hingga ke handler context. |
+| **`WithTracerProvider(tp)`** | `trace.TracerProvider` | `nil` | Provider tracer OpenTelemetry kustom. | Menginstansiasi tracer khusus `github.com/semmidev/orderedjob`. |
+| **`WithEventListener(l)`** | `EventListener` | `NoopEventListener` | Callback interface untuk event lifecycle antrean (`OnJobClaimed`, `OnJobCompleted`, `OnJobFailed`, `OnChainBlocked`, `OnDLQThresholdExceeded`). | Dipanggil saat event terjadi. Pastikan logika di dalam callback tidak memblokir worker execution thread. |
+| **`WithWebhook(cfg)`** | `WebhookConfig` | `nil` | Dispatcher notifikasi HTTP Webhook otomatis. | Mengirimkan HTTP POST JSON/Slack payload saat event `OnJobFailed` atau `OnChainBlocked` dipicu. |
+| **`WithDLQThreshold(n)`** | `int64` | `0` (Disabled) | Batas ambang jumlah job gagal di DLQ untuk memicu callback `OnDLQThresholdExceeded`. | Mengirimkan sinyal peringatan jika akumulasi job gagal di DLQ telah melebihi `n`. |
+
+---
+
+### 📦 Parameter `orderedjob.EnqueueRequest`
+
+| Parameter Field | Tipe Data | Wajib/Opsional | Deskripsi & Fungsi |
+| :--- | :--- | :--- | :--- |
+| `ChainID` | `string` | **Wajib** | Identifier unik rantai antrean (misal: ID akun, ID pesanan, ID tenant). Job dalam ChainID yang sama dieksekusi secara FIFO sekuensial. |
+| `Sequence` | `int64` | **Wajib** | Nomor urutan eksekusi (`>= 1` untuk urutan eksplisit, `0` untuk alokasi otomatis *Auto-Sequence*). |
+| `Type` | `string` | **Wajib** | Nama tipe job yang terdaftar pada handler registry engine via `RegisterTyped` / `RegisterFunc`. |
+| `Payload` | `any` | **Wajib** | Struct atau map data yang akan diserialisasi ke JSON payload. |
+| `IdempotencyKey` | `string` | Opsional | Key unik untuk mencegah duplikasi enkui akibat retry client HTTP. |
+| `TenantID` | `string` | Opsional | Identifier isolasi multi-tenant untuk filtering dan rate-limiting. |
+| `TraceID` | `string` | Opsional | Identifier penelusuran terdistribusi (*Distributed Tracing*). |
+| `OrderingMode` | `string` | Opsional | Override mode urutan khusus job ini (`strict`, `skip-on-failure`, `dead-letter-and-continue`). |
+| `MaxAttempts` | `int` | Opsional | Override batas maksimal percobaan ulang retry khusus job ini. |
+| `DeadlineAt` | `*time.Time` | Opsional | Batas waktu maksimal eksekusi job sebelum dianggap kadaluarsa. |
+| `AvailableAt` | `*time.Time` | Opsional | Timestamp kapan job mulai diizinkan diklaim oleh worker scanner. |
+
+---
+
+### 🔍 Parameter Filter `orderedjob.JobFilter` (DLQ & Searching)
+
+| Filter Field | Tipe Data | Deskripsi & Fungsi |
+| :--- | :--- | :--- |
+| `ChainID` | `string` | Memfilter pencarian berdasarkan ID rantai tertentu. |
+| `JobType` | `string` | Memfilter berdasarkan nama tipe job. |
+| `TenantID` | `string` | Memfilter berdasarkan ID tenant. |
+| `Status` | `string` | Memfilter berdasarkan status (`PENDING`, `PROCESSING`, `RETRYING`, `FAILED`, `CANCELLED`, `DEAD_LETTERED`, `COMPLETED`). |
+| `TraceID` | `string` | Memfilter berdasarkan Trace ID penelusuran. |
+| `ErrorMessage` | `string` | Memfilter job yang mengandung potongan teks error tertentu pada kolom `last_error`. |
+| `CreatedBefore` | `time.Time` | Memfilter job yang dibuat sebelum timestamp ini. |
+| `CreatedAfter` | `time.Time` | Memfilter job yang dibuat setelah timestamp ini. |
+| `Limit` | `int` | Batas jumlah baris data yang dikembalikan (pagination). |
+| `Offset` | `int` | Indeks pergeseran baris data (pagination). |
+
+---
+
 ## 1. Skenario 1: Dasar & In-Memory Quickstart
 
 ### 🎯 Fungsi Utama
-Menjalankan `orderedjob` menggunakan adapter memori (`repository/memory`) tanpa dependensi database eksternal. Cocok untuk unit testing, pengujian lokal, atau pemrosesan antrean internal aplikasi microservice.
+Menjalankan `orderedjob` menggunakan adapter memori (`repository/memory`) tanpa dependensi database eksternal. Cocok untuk unit testing, pengujian lokal, atau pemrosesan antrean internal aplikasi.
 
-### ⚙️ Konfigurasi & Opsi
-- `memory.New()`: Membuat repository in-memory berbasis struct & muteks Go.
-- `orderedjob.New(repo, opts...)`: Menginisialisasi engine orchestrator.
-- `WithConcurrency(n)`: Menentukan jumlah worker goroutine paralel.
-- `RegisterTyped[T]`: Mendaftarkan fungsi handler *type-safe* dengan deserialisasi JSON otomatis.
+### ⚙️ Konfigurasi & Opsi Terlibat
+- `memory.New()`: Inisialisasi storage in-memory berbasis Go struct & muteks.
+- `WithConcurrency(5)`: Mengonfigurasi 5 worker goroutines.
+- `WithPollInterval(100*time.Millisecond)`: Mengatur interval polling scanner ke 100ms.
+- `RegisterTyped[T]`: Mendaftarkan fungsi handler *type-safe* dengan unmarshaling JSON otomatis.
 
 ### ⚠️ Efek Samping (*Side Effects*)
-- Data antrean disimpan di RAM memori volatil. Jika proses aplikasi di-restart, seluruh antrean akan hilang.
-- Penguncian rantai dilakukan di tingkat memori lokal (tidak terdistribusi antar server/node lain).
+- Data antrean disimpan di RAM volatil. Restart aplikasi akan menghapus seluruh data antrean.
+- Penguncian rantai dilakukan di memori lokal (tidak terdistribusi antar node).
 
 ### 💻 Contoh Kode Go
 
@@ -65,19 +129,20 @@ func main() {
 	// 1. Inisialisasi In-Memory Repository
 	repo := memory.New()
 
-	// 2. Buat Engine dengan 5 Worker Goroutines
+	// 2. Inisialisasi Engine dengan Concurrency & Poll Interval
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(5),
 		orderedjob.WithPollInterval(100*time.Millisecond),
+		orderedjob.WithWorkerID("local-worker-1"),
 	)
 
 	// 3. Daftarkan Handler Type-Safe
 	orderedjob.RegisterTyped(eng, "SendNotification", func(ctx context.Context, job orderedjob.Job, payload NotificationPayload) error {
-		fmt.Printf("[WORKER] Mengirim notifikasi ke User %s: %s (Seq: %d)\n", payload.UserID, payload.Message, job.Sequence)
+		fmt.Printf("[WORKER %s] Mengirim notifikasi ke User %s: %s (Seq: %d)\n", job.WorkerID, payload.UserID, payload.Message, job.Sequence)
 		return nil
 	})
 
-	// 4. Jalankan Worker Engine
+	// 4. Jalankan Engine
 	if err := eng.Start(ctx); err != nil {
 		log.Fatalf("Gagal menjalankan engine: %v", err)
 	}
@@ -105,10 +170,10 @@ func main() {
 ### 🎯 Fungsi Utama
 Pengalokasian penomoran urutan otomatis (`Sequence = 0`) tanpa perlu menghitung manual sequence dari sisi aplikasi pengirim. Engine mengeksekusi *Advisory Lock* aman untuk menjamin urutan bertahap (*Step 1 ➔ Step 2 ➔ Step 3*).
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `Sequence: 0`: Memicu mekanisme *Auto-Sequence Allocation*.
-- **PostgreSQL**: Menggunakan `pg_advisory_xact_lock(hashtext(chain_id))`.
-- **SQL Server**: Menggunakan stored procedure `sp_getapplock @Resource = chainID`.
+- **PostgreSQL**: `SELECT pg_advisory_xact_lock(hashtext(chain_id))`.
+- **SQL Server**: `EXEC sp_getapplock @Resource = chainID`.
 
 ### ⚠️ Efek Samping (*Side Effects*)
 - Mengambil penguncian eksklusif singkat pada database per `chain_id` saat enkui untuk mencegah *race condition* nomor urutan.
@@ -172,13 +237,15 @@ func main() {
 ## 3. Skenario 3: Multi-Database Production Engine (PostgreSQL & SQL Server)
 
 ### 🎯 Fungsi Utama
-Menghubungkan `orderedjob` ke database relational skala produksi (**PostgreSQL** atau **Microsoft SQL Server**) dengan isolasi *fencing token* (`lease_generation`) dan pemindahan state terdistribusi.
+Menhubungkan `orderedjob` ke database relational skala produksi (**PostgreSQL** atau **Microsoft SQL Server**) dengan isolasi *fencing token* (`lease_generation`) dan pemindahan state terdistribusi.
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `postgres.New(pool)`: Adapter PostgreSQL berbasis driver `pgxpool.Pool`.
 - `sqlserver.New(db)`: Adapter SQL Server berbasis driver standard `*sql.DB` (`go-mssqldb`).
 - `repo.Migrate(ctx)`: Mengeksekusi DDL migrasi otomatis pemuatan tabel `ordered_jobs` dan indeks parsial.
 - `WithNotify(true)`: Mendengarkan event PostgreSQL `LISTEN/NOTIFY` untuk latensi klaim `< 5ms`.
+- `WithLease(30*time.Second)`: Durasi sewa eksklusif per worker.
+- `WithRecoveryInterval(5*time.Second)`: Pemindaian job tertinggal dari worker mati.
 
 ### ⚠️ Efek Samping (*Side Effects*)
 - Kueri klaim menggunakan `FOR UPDATE SKIP LOCKED` (PostgreSQL) atau `WITH (UPDLOCK, READPAST)` (SQL Server) yang mengisolasi baris job aktif tanpa memblokir koneksi DB lainnya.
@@ -202,7 +269,6 @@ import (
 )
 
 func runPostgresEngine(ctx context.Context, connString string) {
-	// Inisialisasi Connection Pool PGX
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		log.Fatalf("Gagal connect PG: %v", err)
@@ -215,14 +281,15 @@ func runPostgresEngine(ctx context.Context, connString string) {
 
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(10),
-		orderedjob.WithNotify(true), // Aktifkan LISTEN/NOTIFY instan
+		orderedjob.WithNotify(true), // LISTEN/NOTIFY instan
+		orderedjob.WithLease(30*time.Second),
+		orderedjob.WithRecoveryInterval(5*time.Second),
 	)
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 }
 
 func runSQLServerEngine(ctx context.Context, connString string) {
-	// Inisialisasi Database/SQL MSSQL
 	db, err := sql.Open("sqlserver", connString)
 	if err != nil {
 		log.Fatalf("Gagal connect MSSQL: %v", err)
@@ -236,6 +303,7 @@ func runSQLServerEngine(ctx context.Context, connString string) {
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(10),
 		orderedjob.WithPollInterval(200*time.Millisecond),
+		orderedjob.WithLease(30*time.Second),
 	)
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
@@ -255,7 +323,7 @@ Menyesuaikan perilaku penanganan urutan rantai (*chain ordering*) saat terjadi k
 3. **`OrderingModeDeadLetterAndContinue` (`"dead-letter-and-continue"`)**: Mengisolasi Job `N-1` ke DLQ tanpa menahan urutan Job `N`.
 
 ### ⚙️ Dynamic Strategy Resolver
-- `WithOrderingStrategy(func(req EnqueueRequest) string)`: Menentukan mode urutan secara dinamis per `job_type`, `tenant_id`, atau parameter request.
+- `WithOrderingStrategy(func(req EnqueueRequest) string)`: Menentukan mode urutan secara dinamis per `job_type`, `tenant_id`, atau atribut request.
 
 ### ⚠️ Efek Samping (*Side Effects*)
 - Mode `skip-on-failure` atau `dead-letter-and-continue` mengizinkan eksekusi job berikutnya meskipun langkah sebelumnya gagal. Pastikan logika aplikasi Anda tahan terhadap langkah parsial yang terlewati.
@@ -282,6 +350,7 @@ func main() {
 	// Engine dengan Strategi Dinamis per Job Type
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(2),
+		orderedjob.WithOrderingMode(orderedjob.OrderingModeStrict), // Default global
 		orderedjob.WithOrderingStrategy(func(req orderedjob.EnqueueRequest) string {
 			if req.Type == "TelemetryLog" {
 				return orderedjob.OrderingModeSkipOnFailure // Jangan pernah blokir antrean telemetry
@@ -316,14 +385,14 @@ func main() {
 ### 🎯 Fungsi Utama
 Mengendalikan penanganan eror transien (seperti penundaan jaringan/timeout API) dengan *exponential backoff + random jitter* agar tidak membebankan layanan eksternal.
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `orderedjob.Retryable(err)`: Menandai eror sebagai kesalahan transien yang wajib di-retry.
 - `orderedjob.NonRetryable(err)`: Menandai eror sebagai kesalahan terminal yang langsung menghentikan job ke `FAILED`.
 - `WithRetryPolicy(retry.Policy{...})`:
   - `MaxAttempts`: Batas percobaan ulang.
-  - `BaseDelay`: Penundaan awal (misal 1s).
-  - `MaxDelay`: Batas maksimum penundaan (misal 5m).
-  - `Jitter`: Menambahkan acakan delay (Full Jitter / Equal Jitter).
+  - `BaseDelay`: Penundaan awal.
+  - `MaxDelay`: Batas maksimum penundaan.
+  - `Jitter`: Option `retry.NoJitter`, `retry.FullJitter`, atau `retry.EqualJitter`.
 
 ### ⚠️ Efek Samping (*Side Effects*)
 - Job yang di-retry akan berstatus `RETRYING` dan `available_at` diperbarui ke masa depan. Selama masa backoff, urutan berikutnya (`Sequence N+1`) tetap aman di status `BLOCKED`.
@@ -393,7 +462,7 @@ func main() {
 ### 🎯 Fungsi Utama
 Menangkap *unhandled runtime panic* (misal: *nil pointer dereference*) pada kode handler bisnis agar tidak menyebabkan worker pool atau proses aplikasi utama mengalami *crash*.
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `WithPanicHandler(func(ctx, job, panicVal, stack) error)`: Interceptor kustom untuk menangkap objek panic dan *stacktrace* mentah.
 - `WithRetryOnPanic(true)`: Mengizinkan percobaan ulang (retry) jika handler memicu panic.
 
@@ -424,12 +493,12 @@ func main() {
 			fmt.Printf("🚨 [PANIC INTERCEPTED] JobID: %s | Panic: %v\n", job.ID, panicVal)
 			return orderedjob.NonRetryable(fmt.Errorf("recovered panic: %v", panicVal))
 		}),
+		orderedjob.WithRetryOnPanic(false),
 	)
 
-	// Handler yang memicu nil pointer dereference
 	orderedjob.RegisterTyped(eng, "BadTask", func(ctx context.Context, job orderedjob.Job, payload map[string]string) error {
 		var ptr *string
-		fmt.Println(*ptr) // Triggers nil pointer panic!
+		fmt.Println(*ptr) // Nil pointer panic!
 		return nil
 	})
 
@@ -447,9 +516,9 @@ func main() {
 ## 7. Skenario 7: Type-Safe Handlers & Struct Schema Validation
 
 ### 🎯 Fungsi Utama
-Melakukan validasi skema isi *payload* JSON sebelum handler dieksekusi. Jika payload tidak valid (misal email kosong atau angka negatif), job akan langsung ditolak sebelum menjalankan logika utama.
+Melakukan validasi skema isi *payload* JSON sebelum handler dieksekusi. Jika payload tidak valid, job akan langsung ditolak sebelum menjalankan logika bisnis utama.
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 1. **Interface `Validator`**: Implementasi metode `Validate() error` pada struct payload.
 2. **Interface `ValidatorCtx`**: Implementasi metode `ValidateCtx(ctx) error` pada struct payload.
 3. **`RegisterTypedWithValidator[T]`**: Menentukan fungsi validator kustom secara eksplisit saat pendaftaran.
@@ -469,7 +538,6 @@ import (
 	"github.com/semmidev/orderedjob/repository/memory"
 )
 
-// Struct Payload dengan Self-Validation Interface
 type UserRegistration struct {
 	Email string `json:"email"`
 	Age   int    `json:"age"`
@@ -490,7 +558,6 @@ func main() {
 	repo := memory.New()
 	eng := orderedjob.New(repo, orderedjob.WithConcurrency(2))
 
-	// Pendaftaran dengan Otomatis Memanggil Validate()
 	orderedjob.RegisterTyped(eng, "RegisterUser", func(ctx context.Context, job orderedjob.Job, payload UserRegistration) error {
 		fmt.Printf("Registrasi Berhasil: %s (Age: %d)\n", payload.Email, payload.Age)
 		return nil
@@ -499,7 +566,6 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// Enqueue Payload yang Tidak Valid (Age < 17)
 	_, _ = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
 		ChainID:  "reg-001",
 		Sequence: 1,
@@ -518,9 +584,9 @@ func main() {
 ### 🎯 Fungsi Utama
 Menunda eksekusi pekerjaan ke titik waktu tertentu di masa depan (`AvailableAt`), atau mengubah waktu penjadwalan secara dinamis (`RescheduleJob`).
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `eng.Schedule(ctx, req, runAt)`: Menjadwalkan eksekusi tepat pada timestamp `runAt`.
-- `eng.EnqueueDelayed(ctx, req, delay)`: Menjadwalkan eksekusi setelah durasi `delay` (misal 10 menit).
+- `eng.EnqueueDelayed(ctx, req, delay)`: Menjadwalkan eksekusi setelah durasi `delay`.
 - `eng.RescheduleJob(ctx, jobID, newAvailableAt)`: Memperbarui timestamp `AvailableAt` dari job yang sudah ada.
 
 ### ⚠️ Efek Samping (*Side Effects*)
@@ -553,7 +619,6 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// Enqueue Delayed Job (Tunda 1 Detik)
 	fmt.Printf("Waktu Enqueue: %s\n", time.Now().Format("15:04:05"))
 	job, _ := eng.EnqueueDelayed(ctx, orderedjob.EnqueueRequest{
 		ChainID:  "reminder-chain",
@@ -576,11 +641,12 @@ func main() {
 ### 🎯 Fungsi Utama
 Integrasi native dengan **OpenTelemetry (OTel)** dan **Prometheus** untuk penelusuran terdistribusi (*Distributed Tracing W3C TraceContext*) serta pengumpulan metrik performa antrean.
 
-### ⚙️ Konfigurasi & Opsi
+### ⚙️ Konfigurasi & Opsi Terlibat
 - `orderedjob.WithTraceID(ctx, "trace-id")`: Menyisipkan Trace ID pada penyerahan request.
 - `orderedjob.ExtractTraceID(ctx)`: Membaca Trace ID di dalam worker handler.
 - `orderedjob.NewOTelMetrics(meterProvider)`: Ekspor metrik standar OpenTelemetry/Prometheus.
 - `WithSlogLogger(slogLogger)`: Integrasi pencatatan log terstruktur `log/slog`.
+- `WithTracer(tracer)`: Mendaftarkan Tracer OpenTelemetry.
 
 ### 💻 Contoh Kode Go
 
@@ -603,12 +669,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Setup OpenTelemetry Tracer Provider
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	tracer := tp.Tracer("my-service")
 
-	// Setup Structured Slog Logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	repo := memory.New()
@@ -619,7 +683,6 @@ func main() {
 	)
 
 	orderedjob.RegisterTyped(eng, "AuditTask", func(ctx context.Context, job orderedjob.Job, payload map[string]string) error {
-		// Ekstraksi Trace ID terpropagasi
 		traceID := orderedjob.ExtractTraceID(ctx)
 		fmt.Printf("[HANDLER] TraceID: %s | Executing AuditTask\n", traceID)
 		return nil
@@ -628,7 +691,6 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// Buat Span Induk dan Inject Trace Context
 	ctx, span := tracer.Start(ctx, "HTTP-Request-Handler")
 	defer span.End()
 
@@ -651,9 +713,10 @@ func main() {
 ### 🎯 Fungsi Utama
 Mendengarkan *event lifecycle* antrean (seperti kegagalan job atau rantai yang terblokir) untuk memicu pemanggilan webhook HTTP atau alert Slack secara otomatis.
 
-### ⚙️ Konfigurasi & Opsi
-- `WithEventListener(customListener)`: Menggunakan callback interface bawaan.
-- `WithWebhook(WebhookConfig{URL, Secret, Timeout})`: Mengonfigurasi dispatcher notifikasi webhook HTTP otomatis.
+### ⚙️ Konfigurasi & Opsi Terlibat
+- `WithEventListener(customListener)`: Callback interface bawaan.
+- `WithDLQThreshold(10)`: Memicu event `OnDLQThresholdExceeded` jika job gagal mencapai 10.
+- `WithWebhook(WebhookConfig{URL, Secret, Timeout})`: Dispatcher notifikasi webhook HTTP otomatis.
 
 ### 💻 Contoh Kode Go
 
@@ -680,7 +743,9 @@ func (l CustomEventListener) OnJobRetrying(job orderedjob.Job, attempt int, next
 func (l CustomEventListener) OnChainBlocked(chainID string, blockedJob orderedjob.Job) {
 	fmt.Printf("🛑 [CHAIN BLOCKED] Chain %s terhenti akibat Job %s!\n", chainID, blockedJob.ID)
 }
-func (l CustomEventListener) OnDLQThresholdExceeded(dlqCount int64) {}
+func (l CustomEventListener) OnDLQThresholdExceeded(dlqCount int64) {
+	fmt.Printf("🚨 [DLQ ALERT] Jumlah job gagal mencapai ambang batas: %d\n", dlqCount)
+}
 
 func main() {
 	ctx := context.Background()
@@ -688,6 +753,7 @@ func main() {
 
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(2),
+		orderedjob.WithDLQThreshold(5),
 		orderedjob.WithEventListener(CustomEventListener{}),
 		orderedjob.WithWebhook(orderedjob.WebhookConfig{
 			URL:     "https://hooks.slack.com/services/xxx/yyy/zzz",
@@ -761,11 +827,10 @@ func main() {
 ### 🎯 Fungsi Utama
 Mengintegrasikan dashboard antarmuka web interaktif (`/ui`) ke dalam server HTTP Go milik Anda dengan pembaruan grafik dan statistik real-time berbasis **Server-Sent Events (SSE)**.
 
-### ⚙️ Endpoint UI Bawaan
-- `/ui`: Dashboard HTML/JS visual.
-- `/ui/api/stats`: Statistik antrean aktif, scheduled, dan DLQ.
-- `/ui/api/jobs`: Pencarian dan filtering job.
-- `/ui/events`: Stream SSE real-time.
+### ⚙️ Endpoint UI & Options
+- `ui.New(eng)`: Menginstansiasi HTTP handler dashboard Web UI.
+- `ui.WithPrefix("/admin/queue")`: Mengubah prefix path URL rute Web UI.
+- Endpoint `/ui/events`: Stream SSE real-time.
 
 ### 💻 Contoh Kode Go
 
@@ -789,10 +854,9 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// 1. Inisialisasi Router Web UI Dashboard
-	uiHandler := ui.New(eng)
+	// Inisialisasi Router Web UI Dashboard
+	uiHandler := ui.New(eng, ui.WithPrefix("/ui"))
 
-	// 2. Mount ke HTTP Mux Server
 	mux := http.NewServeMux()
 	mux.Handle("/ui/", uiHandler)
 
@@ -831,9 +895,9 @@ import (
 )
 
 type MasterOrderPayload struct {
-	OrderID     string  `json:"order_id"`
-	TotalAmount float64 `json:"total_amount"`
-	CustomerEmail string `json:"customer_email"`
+	OrderID       string  `json:"order_id"`
+	TotalAmount   float64 `json:"total_amount"`
+	CustomerEmail string  `json:"customer_email"`
 }
 
 func (m MasterOrderPayload) Validate() error {
@@ -872,9 +936,14 @@ func main() {
 	// 4. Inisialisasi Engine Kelas Enterprise
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(20),
+		orderedjob.WithPollInterval(200*time.Millisecond),
+		orderedjob.WithLease(45*time.Second),
+		orderedjob.WithRecoveryInterval(10*time.Second),
+		orderedjob.WithWorkerID("master-worker-node-1"),
 		orderedjob.WithNotify(true),
 		orderedjob.WithSlogLogger(logger),
 		orderedjob.WithTracer(tracer),
+		orderedjob.WithDLQThreshold(10),
 		orderedjob.WithRetryPolicy(retry.Policy{
 			MaxAttempts: 5,
 			BaseDelay:   500 * time.Millisecond,
