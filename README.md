@@ -24,6 +24,7 @@
 
 - [📦 Instalasi](#-instalasi)
 - [✨ Fitur Utama](#-fitur-utama)
+- [📖 Panduan Penggunaan Fitur Lengkap (GUIDE.md)](#-panduan-penggunaan-fitur-lengkap-guidemd)
 - [🗄️ Dukungan Database](#️-dukungan-database)
 - [⚡ Quick Start](#-quick-start)
 - [🏛️ Arsitektur Teknis](#️-arsitektur-teknis)
@@ -40,6 +41,14 @@
 ```bash
 go get github.com/semmidev/orderedjob
 ```
+
+---
+
+## 📖 Panduan Penggunaan Fitur Lengkap (`GUIDE.md`)
+
+> [!IMPORTANT]
+> **Panduan Penggunaan Fitur dari Basic hingga Advanced:**
+> Untuk melihat contoh kode Go lengkap (````go````), penjelasan parameter, serta efek samping (*side effects*) dari **seluruh fitur 13 skenario lengkap** (seperti Auto-Sequence, OpenTelemetry Tracing, Panic Isolation, Webhooks, SSE Web UI, Struct Validation, dan Bulk DLQ), silakan baca **[GUIDE.md (Panduan Penggunaan Fitur Lengkap)](GUIDE.md)**.
 
 ---
 
@@ -121,7 +130,7 @@ func main() {
 
 > [!TIP]
 > **Dokumentasi Spesifikasi Arsitektur Lengkap:**
-> Untuk pemahaman mendalam mengenai siklus hidup eksekusi data, skema database DDL, diagram state machine, algoritma penguncian, penanganan *edge cases*, serta hasil pengujian skala besar **100.000 concurrent chains**, silakan baca **[ARCH.md (Technical Architecture Specification)](ARCH.md)**.
+> Untuk pemahaman mendalam mengenai siklus hidup eksekusi data, skema database DDL, diagram state machine, algoritma penguncian, penanganan *edge cases*, serta hasil pengujian skala besar **100.000 concurrent chains**, silakan baca **[ARCH.md (Technical Architecture Specification)](ARCH.md)** dan panduan skenario fitur di **[GUIDE.md](GUIDE.md)**.
 
 ### Ringkasan Alur Data Core
 
@@ -151,7 +160,7 @@ graph TD
 - 💳 **Pipeline Transaksi Finansial**: Menjamin siklus pembayaran (*Validate Account* ➔ *Hold Balance* ➔ *Transfer* ➔ *Send Receipt*) berjalan tepat berurutan per akun tanpa race condition.
 - 📦 **Pemrosesan Pesanan E-Commerce**: Memproses tahapan pesanan (*Create Order* ➔ *Deduct Inventory* ➔ *Generate Invoice* ➔ *Ship Package*) sesuai urutan per pesanan.
 - 🔄 **Event-Driven State Machines**: Mengolah stream kejadian berurutan (*CDC / Event Sourcing*) yang membutuhkan jaminan eksekusi FIFO per entity ID atau tenant ID.
-- 📖 **Contoh Kode Aplikasi Lengkap**: Kunjungi folder **[example/](example/)** untuk melihat integrasi penuh dengan `log/slog`, metrik OpenTelemetry, HTTP UI, dan retry backoff.
+- 📖 **Contoh Kode Aplikasi Lengkap**: Kunjungi folder **[example/](example/)** dan baca **[GUIDE.md](GUIDE.md)** untuk melihat integrasi penuh dengan `log/slog`, metrik OpenTelemetry, HTTP UI, dan retry backoff.
 
 ---
 
