@@ -610,14 +610,13 @@ func (r *Repository) RescheduleJob(ctx context.Context, id uuid.UUID, availableA
 		row := tx.QueryRowContext(ctx, `
 			UPDATE ordered_jobs
 			SET available_at = ?, updated_at = GETUTCDATE()
-			OUTPUT inserted.id, inserted.chain_id, inserted.sequence, inserted.job_type, inserted.payload, inserted.status, inserted.attempt, inserted.max_attempts, inserted.available_at, inserted.deadline_at, COALESCE(inserted.worker_id, ''), inserted.lease_until, inserted.lease_generation, inserted.created_at, inserted.updated_at, inserted.started_at, inserted.completed_at, inserted.failed_at, COALESCE(inserted.idempotency_key, ''), COALESCE(inserted.tenant_id, ''), COALESCE(inserted.last_error, ''), COALESCE(inserted.trace_id, ''), COALESCE(inserted.ordering_mode, 'strict')
+			OUTPUT inserted.id, inserted.chain_id, inserted.sequence, inserted.job_type, inserted.payload, inserted.status, inserted.attempt, inserted.max_attempts, inserted.available_at, inserted.deadline_at, inserted.worker_id, inserted.lease_until, inserted.lease_generation, inserted.created_at, inserted.updated_at, inserted.started_at, inserted.completed_at, inserted.failed_at, inserted.idempotency_key, inserted.tenant_id, inserted.last_error, inserted.trace_id, inserted.ordering_mode
 			WHERE id = ? AND status IN ('PENDING', 'RETRYING')
 		`, availableAt, id.String())
-		err := row.Scan(
-			&job.ID, &job.ChainID, &job.Sequence, &job.Type, &job.Payload, &job.Status, &job.Attempt, &job.MaxAttempts, &job.AvailableAt, &job.DeadlineAt, &job.WorkerID, &job.LeaseUntil, &job.LeaseGeneration, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.CompletedAt, &job.FailedAt, &job.IdempotencyKey, &job.TenantID, &job.LastError, &job.TraceID, &job.OrderingMode,
-		)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		var scanErr error
+		job, scanErr = scanJob(row)
+		if scanErr != nil {
+			if errors.Is(scanErr, orderedjob.ErrNotFound) {
 				var count int
 				_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ordered_jobs WHERE id = ?", id.String()).Scan(&count)
 				if count > 0 {
@@ -625,7 +624,7 @@ func (r *Repository) RescheduleJob(ctx context.Context, id uuid.UUID, availableA
 				}
 				return orderedjob.ErrNotFound
 			}
-			return err
+			return scanErr
 		}
 		return nil
 	})
