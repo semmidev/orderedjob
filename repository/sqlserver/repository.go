@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -702,4 +703,157 @@ func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (r *Repository) GetStats(ctx context.Context) (orderedjob.Stats, error) {
+	var stats orderedjob.Stats
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT status, COUNT(*)
+		FROM ordered_jobs
+		GROUP BY status
+	`)
+	if err != nil {
+		return stats, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var st string
+		var cnt int64
+		if err := rows.Scan(&st, &cnt); err != nil {
+			return stats, err
+		}
+		stats.Total += cnt
+		switch st {
+		case lifecycle.StatePending:
+			stats.Pending = cnt
+		case lifecycle.StateBlocked:
+			stats.Blocked = cnt
+		case lifecycle.StateProcessing:
+			stats.Processing = cnt
+		case lifecycle.StateCompleted:
+			stats.Completed = cnt
+		case lifecycle.StateRetrying:
+			stats.Retrying = cnt
+		case lifecycle.StateFailed:
+			stats.Failed = cnt
+		case lifecycle.StateDeadLettered:
+			stats.DeadLettered = cnt
+		case lifecycle.StateCancelRequested:
+			stats.CancelRequested = cnt
+		case lifecycle.StateCancelled:
+			stats.Cancelled = cnt
+		}
+	}
+
+	err = r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT chain_id) FROM ordered_jobs`).Scan(&stats.ActiveChains)
+	if err != nil {
+		return stats, err
+	}
+
+	return stats, nil
+}
+
+func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]orderedjob.Job, int64, error) {
+	whereClauses := []string{"1=1"}
+	args := []any{}
+	argIdx := 1
+
+	if filter.ChainID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("chain_id = @p%d", argIdx))
+		args = append(args, filter.ChainID)
+		argIdx++
+	}
+	if filter.Status != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("status = @p%d", argIdx))
+		args = append(args, filter.Status)
+		argIdx++
+	}
+	if filter.JobType != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("job_type = @p%d", argIdx))
+		args = append(args, filter.JobType)
+		argIdx++
+	}
+	if filter.Search != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("(CAST(id AS VARCHAR(36)) LIKE @p%d OR idempotency_key LIKE @p%d)", argIdx, argIdx))
+		args = append(args, "%"+filter.Search+"%")
+		argIdx++
+	}
+
+	whereStmt := strings.Join(whereClauses, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM ordered_jobs WHERE %s", whereStmt)
+	var total int64
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	dataQuery := fmt.Sprintf(`
+		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
+		FROM ordered_jobs
+		WHERE %s
+		ORDER BY created_at DESC
+		OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY
+	`, whereStmt, argIdx, argIdx+1)
+
+	args = append(args, offset, limit)
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var jobs []orderedjob.Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		jobs = append(jobs, j)
+	}
+
+	return jobs, total, nil
+}
+
+func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error) {
+	query := `
+		SELECT 
+			chain_id,
+			COUNT(*) as total_jobs,
+			MAX(sequence) as max_sequence,
+			SUM(CASE WHEN status IN ('PENDING', 'PROCESSING', 'RETRYING') THEN 1 ELSE 0 END) as pending_jobs,
+			SUM(CASE WHEN status IN ('FAILED', 'DEAD_LETTERED') THEN 1 ELSE 0 END) as failed_jobs
+		FROM ordered_jobs
+		GROUP BY chain_id
+		ORDER BY chain_id ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []orderedjob.ChainSummary
+	for rows.Next() {
+		var cs orderedjob.ChainSummary
+		if err := rows.Scan(&cs.ChainID, &cs.TotalJobs, &cs.MaxSequence, &cs.PendingJobs, &cs.FailedJobs); err != nil {
+			return nil, err
+		}
+
+		_ = r.db.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = @p1 AND sequence = @p2", cs.ChainID, cs.MaxSequence).Scan(&cs.LatestStatus)
+
+		summaries = append(summaries, cs)
+	}
+
+	return summaries, nil
 }

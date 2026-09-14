@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
@@ -13,9 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/semmidev/orderedjob"
+	memRepo "github.com/semmidev/orderedjob/repository/memory"
 	pgRepo "github.com/semmidev/orderedjob/repository/postgres"
 	mssqlRepo "github.com/semmidev/orderedjob/repository/sqlserver"
 	"github.com/semmidev/orderedjob/retry"
+	"github.com/semmidev/orderedjob/ui"
 )
 
 // OrderPayload represents domain data for an order processing pipeline.
@@ -82,6 +85,11 @@ func main() {
 	ctx := context.Background()
 
 	fmt.Println("================================================================")
+	fmt.Println("🌐 STARTING ORDEREDJOB WEB UI MONITORING SERVER")
+	fmt.Println("================================================================")
+	go runWebUIDemo(ctx)
+
+	fmt.Println("\n================================================================")
 	fmt.Println("🚀 RUNNING ORDEREDJOB DEMO (PART 1: POSTGRESQL ENGINE)")
 	fmt.Println("================================================================")
 	runPostgresDemo(ctx)
@@ -90,6 +98,46 @@ func main() {
 	fmt.Println("🚀 RUNNING ORDEREDJOB DEMO (PART 2: SQL SERVER ENGINE)")
 	fmt.Println("================================================================")
 	runSQLServerDemo(ctx)
+}
+
+func runWebUIDemo(ctx context.Context) {
+	repo := memRepo.New()
+
+	// Seed some initial demo jobs across different states
+	_, _ = repo.Enqueue(ctx, orderedjob.EnqueueRequest{
+		ChainID:        "payment-chain-101",
+		Sequence:       1,
+		Type:           "ProcessPayment",
+		Payload:        OrderPayload{AccountID: "acc-user-88", Amount: 500000, Step: 1},
+		IdempotencyKey: "evt-pay-101-seq-1",
+	})
+	_, _ = repo.Enqueue(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "payment-chain-101",
+		Sequence: 2,
+		Type:     "SendNotification",
+		Payload:  NotificationPayload{Recipient: "user@example.com", Message: "Payment of Rp 500.000 received!"},
+	})
+	jFailed, _ := repo.Enqueue(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "email-chain-202",
+		Sequence: 1,
+		Type:     "SendNotification",
+		Payload:  NotificationPayload{Recipient: "invalid-email-address", Message: "Welcome newsletter"},
+	})
+	_ = repo.Fail(ctx, jFailed.ID, "worker-demo-1", 0, "SMTP Connection Timeout (504)", true)
+
+	handler := ui.NewHandler(repo, ui.WithRootPath("/ui"), ui.WithTitle("OrderedJob Live Monitoring"))
+	
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: handler,
+	}
+
+	fmt.Println("🌐 Web UI Monitoring Dashboard running at: http://localhost:8080/ui")
+	fmt.Println("   Press Ctrl+C to stop.")
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Printf("⚠️ Web UI server error: %v\n", err)
+	}
 }
 
 func runPostgresDemo(ctx context.Context) {

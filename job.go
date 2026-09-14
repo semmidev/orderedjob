@@ -38,16 +38,16 @@ type Job struct {
 
 // EnqueueRequest is used by callers.
 type EnqueueRequest struct {
-	ChainID        string
-	Sequence       int64 // 0 means auto
-	Type           string
-	Payload        any
-	IdempotencyKey string
-	TenantID       string
-	TraceID        string
-	MaxAttempts    int
-	DeadlineAt     *time.Time
-	AvailableAt    *time.Time
+	ChainID        string     `json:"chain_id"`
+	Sequence       int64      `json:"sequence"`
+	Type           string     `json:"job_type"`
+	Payload        any        `json:"payload"`
+	IdempotencyKey string     `json:"idempotency_key,omitempty"`
+	TenantID       string     `json:"tenant_id,omitempty"`
+	TraceID        string     `json:"trace_id,omitempty"`
+	MaxAttempts    int        `json:"max_attempts,omitempty"`
+	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`
+	AvailableAt    *time.Time `json:"available_at,omitempty"`
 }
 
 func (j Job) IsTerminal() bool {

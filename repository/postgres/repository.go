@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -650,6 +651,23 @@ func findExistingByIdempotencyKey(ctx context.Context, tx pgx.Tx, key string) (o
 	return orderedjob.Job{}, false, err
 }
 
+func scanJob(s pgx.Row) (orderedjob.Job, error) {
+	var j orderedjob.Job
+	err := s.Scan(
+		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts,
+		&j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration,
+		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt,
+		&j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return orderedjob.Job{}, orderedjob.ErrNotFound
+		}
+		return orderedjob.Job{}, err
+	}
+	return j, nil
+}
+
 func distinctChains(reqs []orderedjob.EnqueueRequest) []string {
 	set := map[string]struct{}{}
 	for _, r := range reqs {
@@ -660,4 +678,157 @@ func distinctChains(reqs []orderedjob.EnqueueRequest) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func (r *Repository) GetStats(ctx context.Context) (orderedjob.Stats, error) {
+	var stats orderedjob.Stats
+	rows, err := r.pool.Query(ctx, `
+		SELECT status, COUNT(*)
+		FROM ordered_jobs
+		GROUP BY status
+	`)
+	if err != nil {
+		return stats, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var st string
+		var cnt int64
+		if err := rows.Scan(&st, &cnt); err != nil {
+			return stats, err
+		}
+		stats.Total += cnt
+		switch st {
+		case lifecycle.StatePending:
+			stats.Pending = cnt
+		case lifecycle.StateBlocked:
+			stats.Blocked = cnt
+		case lifecycle.StateProcessing:
+			stats.Processing = cnt
+		case lifecycle.StateCompleted:
+			stats.Completed = cnt
+		case lifecycle.StateRetrying:
+			stats.Retrying = cnt
+		case lifecycle.StateFailed:
+			stats.Failed = cnt
+		case lifecycle.StateDeadLettered:
+			stats.DeadLettered = cnt
+		case lifecycle.StateCancelRequested:
+			stats.CancelRequested = cnt
+		case lifecycle.StateCancelled:
+			stats.Cancelled = cnt
+		}
+	}
+
+	err = r.pool.QueryRow(ctx, `SELECT COUNT(DISTINCT chain_id) FROM ordered_jobs`).Scan(&stats.ActiveChains)
+	if err != nil {
+		return stats, err
+	}
+
+	return stats, nil
+}
+
+func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]orderedjob.Job, int64, error) {
+	whereClauses := []string{"1=1"}
+	args := []any{}
+	argIdx := 1
+
+	if filter.ChainID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("chain_id = $%d", argIdx))
+		args = append(args, filter.ChainID)
+		argIdx++
+	}
+	if filter.Status != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIdx))
+		args = append(args, filter.Status)
+		argIdx++
+	}
+	if filter.JobType != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("job_type = $%d", argIdx))
+		args = append(args, filter.JobType)
+		argIdx++
+	}
+	if filter.Search != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("(id::text ILIKE $%d OR idempotency_key ILIKE $%d)", argIdx, argIdx))
+		args = append(args, "%"+filter.Search+"%")
+		argIdx++
+	}
+
+	whereStmt := strings.Join(whereClauses, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM ordered_jobs WHERE %s", whereStmt)
+	var total int64
+	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	dataQuery := fmt.Sprintf(`
+		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
+		FROM ordered_jobs
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereStmt, argIdx, argIdx+1)
+
+	args = append(args, limit, offset)
+
+	rows, err := r.pool.Query(ctx, dataQuery, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var jobs []orderedjob.Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		jobs = append(jobs, j)
+	}
+
+	return jobs, total, nil
+}
+
+func (r *Repository) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error) {
+	query := `
+		SELECT 
+			chain_id,
+			COUNT(*) as total_jobs,
+			MAX(sequence) as max_sequence,
+			COUNT(*) FILTER (WHERE status IN ('PENDING', 'PROCESSING', 'RETRYING')) as pending_jobs,
+			COUNT(*) FILTER (WHERE status IN ('FAILED', 'DEAD_LETTERED')) as failed_jobs
+		FROM ordered_jobs
+		GROUP BY chain_id
+		ORDER BY chain_id ASC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []orderedjob.ChainSummary
+	for rows.Next() {
+		var cs orderedjob.ChainSummary
+		if err := rows.Scan(&cs.ChainID, &cs.TotalJobs, &cs.MaxSequence, &cs.PendingJobs, &cs.FailedJobs); err != nil {
+			return nil, err
+		}
+
+		_ = r.pool.QueryRow(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = $1 AND sequence = $2", cs.ChainID, cs.MaxSequence).Scan(&cs.LatestStatus)
+
+		summaries = append(summaries, cs)
+	}
+
+	return summaries, nil
 }

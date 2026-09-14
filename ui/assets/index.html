@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            canvas: '#fafaf9',
+            card: '#ffffff',
+            border: '#e8e6e5',
+            muted: '#d6d3d1',
+            ash: '#a8a29e',
+            warm: '#78716c',
+            ink: '#0c0a09',
+            soot: '#1c1917',
+            sky: '#c1e1f7',
+            cyan: {
+              signal: '#3ba6f1',
+              edge: '#3398e1',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          boxShadow: {
+            seline: 'rgba(0, 0, 0, 0.05) 0px 4px 16px 0px',
+            subtle: 'rgba(0, 0, 0, 0.05) 0px 1px 2px 0px',
+            preview: 'rgba(17, 12, 46, 0.12) 0px 12px 45px 0px',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #fafaf9;
+      color: #0c0a09;
+      font-family: 'Inter', sans-serif;
+    }
+    .highlight-pill {
+      background-color: #c1e1f7;
+      color: #3398e1;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased">
+  <script>
+    window.CONFIG = {
+      rootPath: "{{ROOT_PATH}}",
+      title: "{{TITLE}}",
+      readOnly: {{READ_ONLY}}
+    };
+  </script>
+
+  <!-- Header -->
+  <header class="bg-card border-b border-border sticky top-0 z-30 shadow-subtle">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-8 h-8 rounded-full bg-ink flex items-center justify-center text-card font-bold text-sm">
+          ⚡
+        </div>
+        <span class="text-lg font-semibold tracking-tight text-ink">OrderedJob</span>
+        <span class="highlight-pill text-xs">Monitoring</span>
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <!-- Live Indicator -->
+        <div class="flex items-center space-x-2 text-xs text-warm bg-canvas border border-border px-3 py-1.5 rounded-full">
+          <span id="refreshPulse" class="w-2 h-2 rounded-full bg-cyan-signal animate-pulse"></span>
+          <span>Auto-refresh:</span>
+          <select id="refreshRateSelect" onchange="changeRefreshRate(this.value)" class="bg-transparent font-medium text-ink focus:outline-none cursor-pointer">
+            <option value="2000">2s</option>
+            <option value="5000" selected>5s</option>
+            <option value="10000">10s</option>
+            <option value="0">Off</option>
+          </select>
+        </div>
+
+        <!-- Enqueue Job Button -->
+        <button onclick="openEnqueueModal()" class="bg-cyan-signal hover:bg-cyan-edge text-white font-medium text-xs px-4 py-2 rounded-full shadow-subtle transition-all flex items-center space-x-1">
+          <span>+ Enqueue Job</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- Hero / Headline -->
+    <div class="space-y-2">
+      <h1 class="text-3xl font-semibold tracking-tight text-ink">
+        Sequential job execution, <span class="highlight-pill">monitored & controlled</span>
+      </h1>
+      <p class="text-warm text-sm">
+        Real-time visibility into queue sequence ordering, leases, retries, and dead-letter queues across all storage backends.
+      </p>
+    </div>
+
+    <!-- Stat Cards Grid -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4" id="statsGrid">
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Pending</div>
+        <div class="text-2xl font-bold text-ink" id="stat-pending">0</div>
+      </div>
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Processing</div>
+        <div class="text-2xl font-bold text-cyan-signal" id="stat-processing">0</div>
+      </div>
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Completed</div>
+        <div class="text-2xl font-bold text-emerald-600" id="stat-completed">0</div>
+      </div>
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Retrying</div>
+        <div class="text-2xl font-bold text-amber-600" id="stat-retrying">0</div>
+      </div>
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Failed / DLQ</div>
+        <div class="text-2xl font-bold text-rose-600" id="stat-failed">0</div>
+      </div>
+    </div>
+
+    <!-- Secondary Stats Bar -->
+    <div class="flex items-center justify-between text-xs text-warm bg-card border border-border px-4 py-3 rounded-xl shadow-subtle">
+      <div class="flex items-center space-x-6">
+        <div>Total Jobs: <span class="font-semibold text-ink" id="stat-total">0</span></div>
+        <div>Blocked Jobs: <span class="font-semibold text-ink" id="stat-blocked">0</span></div>
+        <div>Cancelled Jobs: <span class="font-semibold text-ink" id="stat-cancelled">0</span></div>
+      </div>
+      <div>Active Chains: <span class="font-semibold text-ink" id="stat-active-chains">0</span></div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="flex border-b border-border space-x-6 text-sm font-medium">
+      <button onclick="switchTab('jobs')" id="tab-jobs" class="pb-3 border-b-2 border-cyan-signal text-cyan-signal font-semibold">
+        Jobs Queue
+      </button>
+      <button onclick="switchTab('chains')" id="tab-chains" class="pb-3 border-b-2 border-transparent text-warm hover:text-ink">
+        Chains Summary
+      </button>
+    </div>
+
+    <!-- TAB 1: JOBS QUEUE -->
+    <div id="view-jobs" class="space-y-4">
+      <!-- Search & Filters -->
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+        <div class="flex-1 flex items-center space-x-3">
+          <input type="text" id="searchInput" oninput="debounceFetch()" placeholder="Search Job ID or Idempotency Key..." 
+                 class="w-full sm:max-w-md bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
+          
+          <select id="statusFilter" onchange="fetchJobs(1)" class="bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-cyan-signal shadow-subtle">
+            <option value="">All Statuses</option>
+            <option value="PENDING">PENDING</option>
+            <option value="PROCESSING">PROCESSING</option>
+            <option value="COMPLETED">COMPLETED</option>
+            <option value="BLOCKED">BLOCKED</option>
+            <option value="RETRYING">RETRYING</option>
+            <option value="FAILED">FAILED</option>
+            <option value="DEAD_LETTERED">DEAD_LETTERED</option>
+            <option value="CANCELLED">CANCELLED</option>
+          </select>
+
+          <select id="chainFilter" onchange="fetchJobs(1)" class="bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-cyan-signal shadow-subtle">
+            <option value="">All Chains</option>
+          </select>
+        </div>
+
+        <button onclick="fetchData()" class="bg-card hover:bg-canvas border border-border text-warm hover:text-ink text-xs px-3 py-2 rounded-lg shadow-subtle transition-all flex items-center justify-center space-x-1">
+          <span>🔄 Refresh</span>
+        </button>
+      </div>
+
+      <!-- Jobs Table Card -->
+      <div class="bg-card border border-border rounded-xl shadow-seline overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-canvas border-b border-border text-[11px] font-medium text-warm uppercase tracking-wider">
+                <th class="py-3 px-4">Job ID</th>
+                <th class="py-3 px-4">Chain & Seq</th>
+                <th class="py-3 px-4">Job Type</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Attempt</th>
+                <th class="py-3 px-4">Created At</th>
+                <th class="py-3 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTableBody" class="divide-y divide-border text-xs text-ink">
+              <tr>
+                <td colspan="7" class="py-8 text-center text-warm">Loading jobs data...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Bar -->
+        <div class="bg-canvas border-t border-border px-4 py-3 flex items-center justify-between text-xs text-warm">
+          <div id="paginationInfo">Showing 0 of 0 jobs</div>
+          <div class="flex space-x-2" id="paginationButtons">
+            <button id="btnPrev" onclick="changePage(-1)" class="px-3 py-1 bg-card border border-border rounded-md text-ink disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+            <button id="btnNext" onclick="changePage(1)" class="px-3 py-1 bg-card border border-border rounded-md text-ink disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: CHAINS SUMMARY -->
+    <div id="view-chains" class="space-y-4 hidden">
+      <div class="bg-card border border-border rounded-xl shadow-seline overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-canvas border-b border-border text-[11px] font-medium text-warm uppercase tracking-wider">
+                <th class="py-3 px-4">Chain ID</th>
+                <th class="py-3 px-4">Total Jobs</th>
+                <th class="py-3 px-4">Max Sequence</th>
+                <th class="py-3 px-4">Active / Pending</th>
+                <th class="py-3 px-4">Failed Jobs</th>
+                <th class="py-3 px-4">Latest Status</th>
+              </tr>
+            </thead>
+            <tbody id="chainsTableBody" class="divide-y divide-border text-xs text-ink">
+              <tr>
+                <td colspan="6" class="py-8 text-center text-warm">Loading chains data...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Job Detail Modal (Drawer) -->
+  <div id="jobDetailModal" class="fixed inset-0 z-50 hidden bg-soot/40 backdrop-blur-sm flex justify-end transition-opacity">
+    <div class="w-full max-w-xl bg-card border-l border-border shadow-preview h-full flex flex-col justify-between overflow-y-auto">
+      <div class="p-6 space-y-6">
+        <div class="flex items-center justify-between border-b border-border pb-4">
+          <div>
+            <h3 class="text-lg font-semibold text-ink" id="detailJobTitle">Job Details</h3>
+            <span class="text-xs text-warm" id="detailJobUUID"></span>
+          </div>
+          <button onclick="closeDetailModal()" class="text-warm hover:text-ink text-xl">✕</button>
+        </div>
+
+        <!-- Status & Badge -->
+        <div class="flex items-center space-x-3" id="detailStatusBadge">
+        </div>
+
+        <!-- Job Properties Grid -->
+        <div class="grid grid-cols-2 gap-4 text-xs bg-canvas border border-border p-4 rounded-xl">
+          <div>
+            <span class="text-warm block">Chain ID</span>
+            <span class="font-semibold text-ink" id="detailChainID">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Sequence</span>
+            <span class="font-semibold text-ink" id="detailSequence">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Job Type</span>
+            <span class="font-semibold text-ink" id="detailType">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Attempt</span>
+            <span class="font-semibold text-ink" id="detailAttempt">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Worker ID</span>
+            <span class="font-semibold text-ink" id="detailWorkerID">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Idempotency Key</span>
+            <span class="font-semibold text-ink" id="detailIdempotencyKey">-</span>
+          </div>
+        </div>
+
+        <!-- Error Message (if any) -->
+        <div id="detailErrorBox" class="hidden bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-xs space-y-1">
+          <div class="font-semibold">Last Error:</div>
+          <div class="font-mono" id="detailErrorText"></div>
+        </div>
+
+        <!-- Payload Viewer -->
+        <div class="space-y-2">
+          <div class="text-xs font-semibold text-ink">Payload JSON</div>
+          <pre id="detailPayload" class="bg-soot text-emerald-400 p-4 rounded-xl text-xs font-mono overflow-x-auto max-h-60 border border-border"></pre>
+        </div>
+
+        <!-- Timeline Dates -->
+        <div class="space-y-2 text-xs">
+          <div class="font-semibold text-ink">Job Timeline</div>
+          <div class="space-y-1 bg-canvas border border-border p-3 rounded-xl text-warm">
+            <div>Created At: <span class="text-ink font-medium" id="detailCreatedAt">-</span></div>
+            <div>Available At: <span class="text-ink font-medium" id="detailAvailableAt">-</span></div>
+            <div>Started At: <span class="text-ink font-medium" id="detailStartedAt">-</span></div>
+            <div>Completed At: <span class="text-ink font-medium" id="detailCompletedAt">-</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Footer Buttons -->
+      <div class="p-4 border-t border-border bg-canvas flex items-center justify-end space-x-3" id="detailActions">
+      </div>
+    </div>
+  </div>
+
+  <!-- Enqueue Job Modal -->
+  <div id="enqueueModal" class="fixed inset-0 z-50 hidden bg-soot/40 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="w-full max-w-lg bg-card border border-border rounded-xl shadow-preview p-6 space-y-4">
+      <div class="flex items-center justify-between border-b border-border pb-3">
+        <h3 class="text-base font-semibold text-ink">Enqueue New Job</h3>
+        <button onclick="closeEnqueueModal()" class="text-warm hover:text-ink text-lg">✕</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-warm font-medium mb-1">Chain ID *</label>
+          <input type="text" id="eqChainID" placeholder="e.g. order-payment-101" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal">
+        </div>
+        <div>
+          <label class="block text-warm font-medium mb-1">Job Type *</label>
+          <input type="text" id="eqJobType" placeholder="e.g. ProcessPayment" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-warm font-medium mb-1">Sequence (0 = Auto)</label>
+            <input type="number" id="eqSequence" value="0" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal">
+          </div>
+          <div>
+            <label class="block text-warm font-medium mb-1">Idempotency Key</label>
+            <input type="text" id="eqIdempKey" placeholder="Optional" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal">
+          </div>
+        </div>
+        <div>
+          <label class="block text-warm font-medium mb-1">Payload JSON</label>
+          <textarea id="eqPayload" rows="4" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink font-mono focus:outline-none focus:border-cyan-signal">{"amount": 250000, "currency": "IDR"}</textarea>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end space-x-3 pt-2">
+        <button onclick="closeEnqueueModal()" class="px-4 py-2 bg-canvas border border-border rounded-full text-xs font-medium text-ink hover:bg-border">Cancel</button>
+        <button onclick="submitEnqueue()" class="px-4 py-2 bg-cyan-signal hover:bg-cyan-edge text-white rounded-full text-xs font-medium">Enqueue Job</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentPage = 1;
+    let currentLimit = 20;
+    let refreshTimer = null;
+    let activeTab = 'jobs';
+    let currentDetailID = null;
+
+    const rootAPI = window.CONFIG.rootPath + '/api';
+
+    function init() {
+      fetchData();
+      changeRefreshRate(5000);
+    }
+
+    function changeRefreshRate(ms) {
+      if (refreshTimer) clearInterval(refreshTimer);
+      const pulse = document.getElementById('refreshPulse');
+      if (ms == 0) {
+        pulse.classList.remove('animate-pulse', 'bg-cyan-signal');
+        pulse.classList.add('bg-ash');
+      } else {
+        pulse.classList.remove('bg-ash');
+        pulse.classList.add('animate-pulse', 'bg-cyan-signal');
+        refreshTimer = setInterval(fetchData, parseInt(ms));
+      }
+    }
+
+    function fetchData() {
+      fetchStats();
+      if (activeTab === 'jobs') {
+        fetchJobs(currentPage);
+      } else if (activeTab === 'chains') {
+        fetchChains();
+      }
+    }
+
+    function fetchStats() {
+      fetch(rootAPI + '/stats')
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById('stat-pending').innerText = data.pending || 0;
+          document.getElementById('stat-processing').innerText = data.processing || 0;
+          document.getElementById('stat-completed').innerText = data.completed || 0;
+          document.getElementById('stat-retrying').innerText = data.retrying || 0;
+          document.getElementById('stat-failed').innerText = (data.failed || 0) + (data.dead_lettered || 0);
+          document.getElementById('stat-total').innerText = data.total || 0;
+          document.getElementById('stat-blocked').innerText = data.blocked || 0;
+          document.getElementById('stat-cancelled').innerText = data.cancelled || 0;
+          document.getElementById('stat-active-chains').innerText = data.active_chains || 0;
+        })
+        .catch(err => console.error('Error fetching stats:', err));
+    }
+
+    let searchTimeout = null;
+    function debounceFetch() {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => fetchJobs(1), 300);
+    }
+
+    function fetchJobs(page = 1) {
+      currentPage = page;
+      const status = document.getElementById('statusFilter').value;
+      const chain = document.getElementById('chainFilter').value;
+      const search = document.getElementById('searchInput').value;
+
+      const params = new URLSearchParams({
+        page: page,
+        limit: currentLimit,
+        status: status,
+        chain_id: chain,
+        search: search
+      });
+
+      fetch(rootAPI + '/jobs?' + params.toString())
+        .then(res => res.json())
+        .then(data => {
+          renderJobsTable(data.jobs || []);
+          renderPagination(data.page, data.total_pages, data.total);
+        })
+        .catch(err => console.error('Error fetching jobs:', err));
+    }
+
+    function renderJobsTable(jobs) {
+      const tbody = document.getElementById('jobsTableBody');
+      if (!jobs || jobs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-8 text-center text-warm">No jobs found</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = jobs.map(j => `
+        <tr class="hover:bg-canvas/60 transition-colors">
+          <td class="py-3 px-4 font-mono font-medium text-ink">
+            <button onclick="viewJobDetail('${j.id}')" class="hover:underline text-cyan-edge font-medium">${j.id.substring(0, 8)}...</button>
+          </td>
+          <td class="py-3 px-4">
+            <div class="font-semibold text-ink">${j.chain_id}</div>
+            <div class="text-[11px] text-warm">Seq: ${j.sequence}</div>
+          </td>
+          <td class="py-3 px-4 font-mono text-warm">${j.job_type}</td>
+          <td class="py-3 px-4">${getStatusBadge(j.status)}</td>
+          <td class="py-3 px-4 text-warm">${j.attempt} / ${j.max_attempts}</td>
+          <td class="py-3 px-4 text-warm">${formatDate(j.created_at)}</td>
+          <td class="py-3 px-4 text-right space-x-1">
+            <button onclick="viewJobDetail('${j.id}')" class="px-2.5 py-1 bg-canvas hover:bg-border text-ink rounded-md text-[11px] border border-border">Details</button>
+            ${renderQuickActions(j)}
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function renderQuickActions(j) {
+      if (window.CONFIG.readOnly) return '';
+      let btns = '';
+      if (['FAILED', 'DEAD_LETTERED', 'CANCELLED'].includes(j.status)) {
+        btns += `<button onclick="actionJob('${j.id}', 'replay')" class="px-2.5 py-1 bg-cyan-signal text-white rounded-md text-[11px] hover:bg-cyan-edge">Replay</button>`;
+      }
+      if (['FAILED', 'DEAD_LETTERED', 'CANCELLED', 'BLOCKED'].includes(j.status)) {
+        btns += `<button onclick="actionJob('${j.id}', 'skip')" class="px-2.5 py-1 bg-amber-500 text-white rounded-md text-[11px] hover:bg-amber-600">Skip</button>`;
+      }
+      if (['PENDING', 'PROCESSING', 'RETRYING'].includes(j.status)) {
+        btns += `<button onclick="actionJob('${j.id}', 'cancel')" class="px-2.5 py-1 bg-rose-500 text-white rounded-md text-[11px] hover:bg-rose-600">Cancel</button>`;
+      }
+      return btns;
+    }
+
+    function fetchChains() {
+      fetch(rootAPI + '/chains')
+        .then(res => res.json())
+        .then(data => {
+          renderChainsTable(data.chains || []);
+          populateChainFilterSelect(data.chains || []);
+        })
+        .catch(err => console.error('Error fetching chains:', err));
+    }
+
+    function renderChainsTable(chains) {
+      const tbody = document.getElementById('chainsTableBody');
+      if (!chains || chains.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-warm">No active chains</td></tr>';
+        return;
+      }
+      tbody.innerHTML = chains.map(c => `
+        <tr class="hover:bg-canvas/60 transition-colors">
+          <td class="py-3 px-4 font-semibold text-ink">${c.chain_id}</td>
+          <td class="py-3 px-4 text-ink">${c.total_jobs}</td>
+          <td class="py-3 px-4 text-ink">${c.max_sequence}</td>
+          <td class="py-3 px-4 text-cyan-signal font-medium">${c.pending_jobs}</td>
+          <td class="py-3 px-4 text-rose-600 font-medium">${c.failed_jobs}</td>
+          <td class="py-3 px-4">${getStatusBadge(c.latest_status)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function populateChainFilterSelect(chains) {
+      const select = document.getElementById('chainFilter');
+      const current = select.value;
+      select.innerHTML = '<option value="">All Chains</option>' + chains.map(c => 
+        `<option value="${c.chain_id}" ${c.chain_id === current ? 'selected' : ''}>${c.chain_id}</option>`
+      ).join('');
+    }
+
+    function getStatusBadge(status) {
+      const map = {
+        'PENDING': 'bg-sky-100 text-sky-800 border-sky-200',
+        'PROCESSING': 'bg-blue-100 text-blue-800 border-blue-200',
+        'COMPLETED': 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        'BLOCKED': 'bg-stone-200 text-stone-700 border-stone-300',
+        'RETRYING': 'bg-amber-100 text-amber-800 border-amber-200',
+        'FAILED': 'bg-rose-100 text-rose-800 border-rose-200',
+        'DEAD_LETTERED': 'bg-rose-200 text-rose-900 border-rose-300',
+        'CANCELLED': 'bg-gray-200 text-gray-700 border-gray-300',
+        'CANCEL_REQUESTED': 'bg-amber-100 text-amber-800 border-amber-200'
+      };
+      const cls = map[status] || 'bg-gray-100 text-gray-800 border-gray-200';
+      return `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${cls}">${status}</span>`;
+    }
+
+    function renderPagination(page, totalPages, total) {
+      document.getElementById('paginationInfo').innerText = `Showing page ${page} of ${totalPages} (${total} total jobs)`;
+      document.getElementById('btnPrev').disabled = (page <= 1);
+      document.getElementById('btnNext').disabled = (page >= totalPages);
+    }
+
+    function changePage(delta) {
+      fetchJobs(currentPage + delta);
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.getElementById('view-jobs').classList.toggle('hidden', tab !== 'jobs');
+      document.getElementById('view-chains').classList.toggle('hidden', tab !== 'chains');
+
+      document.getElementById('tab-jobs').className = tab === 'jobs' 
+        ? 'pb-3 border-b-2 border-cyan-signal text-cyan-signal font-semibold'
+        : 'pb-3 border-b-2 border-transparent text-warm hover:text-ink';
+
+      document.getElementById('tab-chains').className = tab === 'chains' 
+        ? 'pb-3 border-b-2 border-cyan-signal text-cyan-signal font-semibold'
+        : 'pb-3 border-b-2 border-transparent text-warm hover:text-ink';
+
+      fetchData();
+    }
+
+    function viewJobDetail(id) {
+      currentDetailID = id;
+      fetch(rootAPI + '/jobs/' + id)
+        .then(res => res.json())
+        .then(j => {
+          document.getElementById('detailJobTitle').innerText = j.job_type || 'Job Details';
+          document.getElementById('detailJobUUID').innerText = j.id;
+          document.getElementById('detailStatusBadge').innerHTML = getStatusBadge(j.status);
+          document.getElementById('detailChainID').innerText = j.chain_id;
+          document.getElementById('detailSequence').innerText = j.sequence;
+          document.getElementById('detailType').innerText = j.job_type;
+          document.getElementById('detailAttempt').innerText = `${j.attempt} / ${j.max_attempts}`;
+          document.getElementById('detailWorkerID').innerText = j.worker_id || 'None';
+          document.getElementById('detailIdempotencyKey').innerText = j.idempotency_key || 'None';
+
+          if (j.last_error) {
+            document.getElementById('detailErrorBox').classList.remove('hidden');
+            document.getElementById('detailErrorText').innerText = j.last_error;
+          } else {
+            document.getElementById('detailErrorBox').classList.add('hidden');
+          }
+
+          let payloadObj = j.payload;
+          if (typeof payloadObj === 'string') {
+            try { payloadObj = JSON.parse(payloadObj); } catch(e){}
+          }
+          document.getElementById('detailPayload').innerText = JSON.stringify(payloadObj, null, 2);
+
+          document.getElementById('detailCreatedAt').innerText = formatDate(j.created_at);
+          document.getElementById('detailAvailableAt').innerText = formatDate(j.available_at);
+          document.getElementById('detailStartedAt').innerText = j.started_at ? formatDate(j.started_at) : 'Not started';
+          document.getElementById('detailCompletedAt').innerText = j.completed_at ? formatDate(j.completed_at) : 'Not completed';
+
+          document.getElementById('detailActions').innerHTML = renderQuickActions(j);
+          document.getElementById('jobDetailModal').classList.remove('hidden');
+        })
+        .catch(err => alert('Failed to fetch job detail: ' + err));
+    }
+
+    function closeDetailModal() {
+      document.getElementById('jobDetailModal').classList.add('hidden');
+    }
+
+    function actionJob(id, action) {
+      if (!confirm(`Are you sure you want to ${action} job ${id.substring(0, 8)}?`)) return;
+      fetch(rootAPI + `/jobs/${id}/${action}`, { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.error) alert('Error: ' + data.error);
+          closeDetailModal();
+          fetchData();
+        })
+        .catch(err => alert('Action failed: ' + err));
+    }
+
+    function openEnqueueModal() {
+      document.getElementById('enqueueModal').classList.remove('hidden');
+    }
+
+    function closeEnqueueModal() {
+      document.getElementById('enqueueModal').classList.add('hidden');
+    }
+
+    function submitEnqueue() {
+      const chainID = document.getElementById('eqChainID').value.trim();
+      const type = document.getElementById('eqJobType').value.trim();
+      const seq = parseInt(document.getElementById('eqSequence').value) || 0;
+      const key = document.getElementById('eqIdempKey').value.trim();
+      let payload = {};
+      try {
+        payload = JSON.parse(document.getElementById('eqPayload').value);
+      } catch(e) {
+        alert('Invalid Payload JSON');
+        return;
+      }
+
+      if (!chainID || !type) {
+        alert('Chain ID and Job Type are required');
+        return;
+      }
+
+      fetch(rootAPI + '/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chain_id: chainID,
+          job_type: type,
+          sequence: seq,
+          idempotency_key: key,
+          payload: payload
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert('Enqueue failed: ' + data.error);
+        } else {
+          closeEnqueueModal();
+          fetchData();
+        }
+      })
+      .catch(err => alert('Enqueue failed: ' + err));
+    }
+
+    function formatDate(dtStr) {
+      if (!dtStr) return '-';
+      const d = new Date(dtStr);
+      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>

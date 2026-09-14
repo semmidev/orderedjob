@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -501,4 +502,119 @@ func (r *repo) SkipJob(ctx context.Context, id uuid.UUID) error {
 		}
 	}
 	return nil
+}
+
+func (r *repo) GetStats(ctx context.Context) (orderedjob.Stats, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var stats orderedjob.Stats
+	stats.Total = int64(len(r.jobs))
+	stats.ActiveChains = int64(len(r.chain))
+
+	for _, j := range r.jobs {
+		switch j.Status {
+		case lifecycle.StatePending:
+			stats.Pending++
+		case lifecycle.StateBlocked:
+			stats.Blocked++
+		case lifecycle.StateProcessing:
+			stats.Processing++
+		case lifecycle.StateCompleted:
+			stats.Completed++
+		case lifecycle.StateRetrying:
+			stats.Retrying++
+		case lifecycle.StateFailed:
+			stats.Failed++
+		case lifecycle.StateDeadLettered:
+			stats.DeadLettered++
+		case lifecycle.StateCancelRequested:
+			stats.CancelRequested++
+		case lifecycle.StateCancelled:
+			stats.Cancelled++
+		}
+	}
+
+	return stats, nil
+}
+
+func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]orderedjob.Job, int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var matched []orderedjob.Job
+	search := strings.ToLower(filter.Search)
+
+	for _, j := range r.jobs {
+		if filter.ChainID != "" && j.ChainID != filter.ChainID {
+			continue
+		}
+		if filter.Status != "" && j.Status != filter.Status {
+			continue
+		}
+		if filter.JobType != "" && j.Type != filter.JobType {
+			continue
+		}
+		if search != "" {
+			idStr := strings.ToLower(j.ID.String())
+			keyStr := strings.ToLower(j.IdempotencyKey)
+			if !strings.Contains(idStr, search) && !strings.Contains(keyStr, search) {
+				continue
+			}
+		}
+		matched = append(matched, j)
+	}
+
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].CreatedAt.After(matched[j].CreatedAt)
+	})
+
+	total := int64(len(matched))
+	if filter.Offset >= len(matched) {
+		return []orderedjob.Job{}, total, nil
+	}
+
+	end := filter.Offset + filter.Limit
+	if filter.Limit <= 0 || end > len(matched) {
+		end = len(matched)
+	}
+
+	return matched[filter.Offset:end], total, nil
+}
+
+func (r *repo) ListChains(ctx context.Context) ([]orderedjob.ChainSummary, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var summaries []orderedjob.ChainSummary
+	for chainID, m := range r.chain {
+		var cs orderedjob.ChainSummary
+		cs.ChainID = chainID
+		cs.TotalJobs = int64(len(m))
+
+		var maxSeq int64
+		var latestJob orderedjob.Job
+		for seq, id := range m {
+			if seq > maxSeq {
+				maxSeq = seq
+				latestJob = r.jobs[id]
+			}
+			j := r.jobs[id]
+			if j.Status == lifecycle.StatePending || j.Status == lifecycle.StateProcessing || j.Status == lifecycle.StateRetrying {
+				cs.PendingJobs++
+			}
+			if j.Status == lifecycle.StateFailed || j.Status == lifecycle.StateDeadLettered {
+				cs.FailedJobs++
+			}
+		}
+		cs.MaxSequence = maxSeq
+		cs.LatestStatus = latestJob.Status
+		summaries = append(summaries, cs)
+	}
+
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].ChainID < summaries[j].ChainID
+	})
+
+	return summaries, nil
 }
