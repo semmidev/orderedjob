@@ -633,13 +633,15 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 			t.Fatal("Worker pool crashed or stopped processing after handler panic")
 		}
 
-		j1Fetched, _ := eng.Get(ctx, j1.ID)
-		j2Fetched, _ := eng.Get(ctx, j2.ID)
+		assert.Eventually(t, func() bool {
+			j1Fetched, _ := eng.Get(ctx, j1.ID)
+			j2Fetched, _ := eng.Get(ctx, j2.ID)
+			return j1Fetched.Status == "FAILED" && j2Fetched.Status == "COMPLETED"
+		}, 2*time.Second, 10*time.Millisecond, "expected job1 FAILED and job2 COMPLETED")
 
-		assert.Equal(t, "FAILED", j1Fetched.Status)
+		j1Fetched, _ := eng.Get(ctx, j1.ID)
 		assert.Contains(t, j1Fetched.LastError, "panic: simulated unhandled runtime panic")
 		assert.Contains(t, j1Fetched.LastError, "stacktrace:")
-		assert.Equal(t, "COMPLETED", j2Fetched.Status)
 	})
 
 	t.Run("Custom PanicHandler interceptor", func(t *testing.T) {
