@@ -13,7 +13,7 @@
   </p>
 
   <p>
-    <code>github.com/semmidev/orderedjob</code> mengeksekusi job secara berurutan (<b>FIFO per chain</b>) dengan eksekusi paralel antar-chain.<br/>Storage engine terdistribusi digunakan untuk locking, ordering, retry, dan recovery secara aman.
+    <code>github.com/semmidev/orderedjob</code> mengeksekusi job secara berurutan (<b>FIFO per chain</b>) dengan eksekusi paralel tinggi antar-chain.<br/>Dilengkapi storage engine terdistribusi aman untuk locking, ordering, retry, recovery, dan observabilitas OpenTelemetry.
   </p>
 
 </div>
@@ -25,13 +25,11 @@
 - [📦 Instalasi](#-instalasi)
 - [✨ Fitur Utama](#-fitur-utama)
 - [🗄️ Dukungan Database](#️-dukungan-database)
+- [⚡ Quick Start](#-quick-start)
+- [🏛️ Arsitektur Teknis](#️-arsitektur-teknis)
 - [💡 Contoh Usecase](#-contoh-usecase)
-- [🏗️ Arsitektur](#️-arsitektur)
-- [🚦 State Machine](#-state-machine)
-- [🚀 Contoh Penggunaan](#-contoh-penggunaan)
-- [🛠️ Penanganan Job Gagal (DLQ Operations)](#️-penanganan-job-gagal-dlq-operations)
-- [⚙️ Opsi Konfigurasi Engine](#️-opsi-konfigurasi-engine)
-- [🧪 Testing](#-testing)
+- [🛠️ Penanganan DLQ & Webhooks](#️-penanganan-dlq--webhooks)
+- [🧪 Testing & Benchmarks](#-testing--benchmarks)
 - [📄 Lisensi](#-lisensi)
 
 ---
@@ -46,44 +44,85 @@ go get github.com/semmidev/orderedjob
 
 ## ✨ Fitur Utama
 
-- 🔒 **Per-Chain Ordering**: Job $N$ hanya berjalan setelah Job $N-1$ berstatus `COMPLETED`.
-- 🚀 **Paralelisme Antar Chain**: Ribuan chain berjalan bersamaan secara independen tanpa lock contention.
-- 🗄️ **Multi-Database Support**: Dukungan penuh persistence engine untuk **PostgreSQL** dan **Microsoft SQL Server**.
-- 🔔 **Instant Event Notification**: Menggunakan PostgreSQL `LISTEN/NOTIFY` (atau polling interval ber-jitter) untuk latensi klaim `< 5ms`.
-- 🎯 **Type-Safe Handlers**: Pendaftaran handler menggunakan Go Generics (`RegisterTyped[T]`) dengan unmarshaling JSON otomatis.
-- 🛡️ **Fencing Protection**: Fencing token (`lease_generation`) mencegah race condition dari worker yang terhambat (*lagging*).
-- 🛠️ **Manajemen DLQ**: Menyediakan API `ReplayJob` dan `SkipJob` untuk memulihkan atau melewati job yang gagal.
-- 🌐 **Distributed Tracing**: Dukungan *TraceContext propagation* (`TraceID`) antar pemanggilan asinkron.
-- 🔌 **In-Memory Adapter**: Adapter `memory` bawaan untuk pengujian cepat tanpa database.
+- 🔒 **Per-Chain Ordering**: Jaminan urutan FIFO ketat per `chain_id` tanpa *race condition*.
+- 🚀 **100k Concurrent Chains**: Eksekusi paralel masal antar-chain dengan *zero cross-chain lock contention*.
+- 🗄️ **Multi-Database Support**: Adapter terintegrasi penuh untuk **PostgreSQL** (`FOR UPDATE SKIP LOCKED`) dan **Microsoft SQL Server** (`WITH (UPDLOCK, READPAST)`).
+- ⚡ **Sub-5ms Latency**: Sinyal instan `LISTEN/NOTIFY` (atau polling interval jitter) untuk pengambil pekerjaan seketika.
+- 🎯 **Type-Safe Handlers & Validation**: Pendaftaran handler menggunakan Go Generics (`RegisterTyped[T]`) dengan deserialisasi JSON dan validator skema struct otomatis.
+- 🛡️ **Panic Recovery Guard**: Mengisolasi *unhandled panic* pada handler goroutine, mencatat *stack trace* lengkap, dan menjaga worker pool tetap stabil.
+- ⚙️ **Policy-Driven Ordering**: Mode urutan fleksibel (`strict`, `skip-on-failure`, dan `dead-letter-and-continue`).
+- 🛠️ **Bulk DLQ & Webhooks**: Replay, skip, dan purge masal untuk job bermasalah, dilengkapi pengiriman notifikasi HTTP Webhook otomatis.
+- 🔭 **Native OpenTelemetry & Prometheus**: Integrasi penelusuran terdistribusi (`TraceID`) dan pengumpul metrik *queue latency* & duration.
+- 🖥️ **Live SSE Web UI Dashboard**: Antarmuka pemantauan antrean real-time berbasis Server-Sent Events (`/ui`) lengkap dengan payload editor.
 
 ---
 
 ## 🗄️ Dukungan Database
 
-`orderedjob` menyediakan arsitektur storage engine yang *pluggable*. Anda dapat memilih adapter database yang sesuai dengan infrastruktur stack aplikasi Anda:
+`orderedjob` menyediakan arsitektur storage engine yang *pluggable*:
 
 | Database Engine | Package Path | Driver / Client | Fitur Penguncian & Koordinasi | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **PostgreSQL** | [`repository/postgres`](repository/postgres) | [`pgxpool.Pool`](https://github.com/jackc/pgx) | `FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`, Advisory Lock | GA (Production Ready) |
-| **Microsoft SQL Server** | [`repository/sqlserver`](repository/sqlserver) | [`*sql.DB`](https://github.com/microsoft/go-mssqldb) | `WITH (UPDLOCK, READPAST)`, `sp_getapplock`, `OUTPUT` Clause | GA (Production Ready) |
+| **Microsoft SQL Server** | [`repository/sqlserver`](repository/sqlserver) | [`*sql.DB`](https://github.com/microsoft/go-mssqldb) | `WITH (UPDLOCK, READPAST)`, `sp_getapplock` | GA (Production Ready) |
 | **In-Memory** | [`repository/memory`](repository/memory) | In-Memory Struct | Mutex Locking (Tanpa Database) | Testing / Local Dev |
 
 ---
 
-## 💡 Contoh Usecase
+## ⚡ Quick Start
 
-- **✅ Multi-Stage Approval Workflow**: Memproses alur persetujuan bertahap (*Approve A* ➔ *Approve B* ➔ ... ➔ *Approve E*) secara sekuensial per dokumen/permohonan dengan pengiriman API inter-service otomatis.
-- **💳 Pipeline Transaksi Finansial**: Menjamin siklus pembayaran (*Validate Account* ➔ *Hold Balance* ➔ *Transfer* ➔ *Send Receipt*) berjalan tepat berurutan per akun tanpa race condition.
-- **📦 Pemrosesan Pesanan E-Commerce**: Memproses tahapan pesanan (*Create Order* ➔ *Deduct Inventory* ➔ *Generate Invoice* ➔ *Ship Package*) sesuai urutan per pesanan.
-- **👤 User Onboarding Workflow**: Eksekusi berurutan untuk registrasi pengguna (*Create User* ➔ *Send Verification Email* ➔ *Provision Default Workspace* ➔ *Trigger Analytics Event*).
-- **🔄 Event-Driven State Machines**: Mengolah stream kejadian berurutan (*CDC / Event Sourcing*) yang membutuhkan jaminan eksekusi FIFO per entity ID atau tenant ID.
-- **🏢 SaaS Multi-Tenant Background Jobs**: Menjalankan *background processing* berat dengan isolasi antar tenant tanpa memblokir pemrosesan tenant lain.
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/semmidev/orderedjob"
+	"github.com/semmidev/orderedjob/repository/memory"
+)
+
+type PaymentPayload struct {
+	AccountID string  `json:"account_id"`
+	Amount    float64 `json:"amount"`
+}
+
+func main() {
+	ctx := context.Background()
+	repo := memory.New()
+	eng := orderedjob.New(repo, orderedjob.WithConcurrency(5))
+
+	// Pendaftaran Type-Safe Handler
+	orderedjob.RegisterTyped(eng, "ProcessPayment", func(ctx context.Context, job orderedjob.Job, payload PaymentPayload) error {
+		log.Printf("Memproses pembayaran %s senilai %.2f", payload.AccountID, payload.Amount)
+		return nil
+	})
+
+	// Jalankan Engine
+	if err := eng.Start(ctx); err != nil {
+		log.Fatalf("Gagal menjalankan engine: %v", err)
+	}
+	defer eng.Shutdown(ctx)
+
+	// Enqueue Job Berurutan
+	_, _ = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "account-12345",
+		Sequence: 1,
+		Type:     "ProcessPayment",
+		Payload:  PaymentPayload{AccountID: "account-12345", Amount: 150.00},
+	})
+}
+```
 
 ---
 
-## 🏗️ Arsitektur
+## 🏛️ Arsitektur Teknis
 
-<div align="center">
+> [!TIP]
+> **Dokumentasi Spesifikasi Arsitektur Lengkap:**
+> Untuk pemahaman mendalam mengenai siklus hidup eksekusi data, skema database DDL, diagram state machine, algoritma penguncian, penanganan *edge cases*, serta hasil pengujian skala besar **100.000 concurrent chains**, silakan baca **[ARCH.md (Technical Architecture Specification)](ARCH.md)**.
+
+### Ringkasan Alur Data Core
 
 ```mermaid
 graph TD
@@ -91,116 +130,60 @@ graph TD
     
     subgraph Engine["OrderedJob Engine"]
         Listen["Event Stream / Poller\n(< 5ms Latency)"]
-        Scanner["SKIP LOCKED / READPAST Scanner\n(Partial Index)"]
-        WorkerPool["Worker Pool\n(Goroutines)"]
-        Registry["Handler Registry\n(Type-Safe Generics)"]
-        Recovery["Recovery Worker\n(Stale Lease Recovery)"]
+        Scanner["SKIP LOCKED / READPAST Scanner"]
+        WorkerPool["Worker Pool & Panic Guard"]
+        Registry["Type-Safe Registry"]
     end
 
     DB -->|"Event / Poll"| Listen
     DB -->|"SKIP LOCKED / UPDLOCK"| Scanner
     Listen -->|"Wakeup Event"| WorkerPool
     Scanner -->|"Claim Job"| WorkerPool
-    Recovery -->|"Reclaim Stale Jobs"| DB
     WorkerPool -->|"Execute"| Registry
-    Registry -->|"Side Effects / Actions"| External["External Systems / APIs"]
+    Registry -->|"Side Effects / Actions"| External["External APIs / DBs"]
 ```
 
-</div>
+---
+
+## 💡 Contoh Usecase
+
+- 💳 **Pipeline Transaksi Finansial**: Menjamin siklus pembayaran (*Validate Account* ➔ *Hold Balance* ➔ *Transfer* ➔ *Send Receipt*) berjalan tepat berurutan per akun tanpa race condition.
+- 📦 **Pemrosesan Pesanan E-Commerce**: Memproses tahapan pesanan (*Create Order* ➔ *Deduct Inventory* ➔ *Generate Invoice* ➔ *Ship Package*) sesuai urutan per pesanan.
+- 🔄 **Event-Driven State Machines**: Mengolah stream kejadian berurutan (*CDC / Event Sourcing*) yang membutuhkan jaminan eksekusi FIFO per entity ID atau tenant ID.
+- 📖 **Contoh Kode Aplikasi Lengkap**: Kunjungi folder **[example/](example/)** untuk melihat integrasi penuh dengan `log/slog`, metrik OpenTelemetry, HTTP UI, dan retry backoff.
 
 ---
 
-## 🚦 State Machine
+## 🛠️ Penanganan DLQ & Webhooks
 
-<div align="center">
-
-```mermaid
-stateDiagram-v2
-    [*] --> BLOCKED: Sequence > 1 (Predecessor Pending)
-    [*] --> PENDING: Sequence = 1 / Auto Sequence
-    
-    BLOCKED --> PENDING: Predecessor Status = COMPLETED
-    PENDING --> PROCESSING: Worker Claim (Acquire Lease)
-    RETRYING --> PROCESSING: Worker Claim (Acquire Lease)
-    
-    PROCESSING --> COMPLETED: Handler Success (Promote Next Sequence)
-    PROCESSING --> RETRYING: Transient Failure (Backoff & Jitter)
-    PROCESSING --> FAILED: Terminal Error / Max Attempts Reached
-    PROCESSING --> CANCEL_REQUESTED: User Cancel Request
-    
-    CANCEL_REQUESTED --> CANCELLED: Worker Confirm Cancel
-    FAILED --> DEAD_LETTERED: Final DLQ State
-    
-    COMPLETED --> [*]
-    CANCELLED --> [*]
-    DEAD_LETTERED --> [*]
-```
-
-</div>
-
-> [!IMPORTANT]
-> Hanya status `COMPLETED` yang melepaskan urutan job berikutnya (*sequence N+1*). Status `FAILED`, `CANCELLED`, atau `EXPIRED` akan memblokir chain secara default demi keamanan data.
-
----
-
-## 🚀 Contoh Penggunaan
-
-Untuk melihat contoh kode aplikasi lengkap yang mencakup integrasi database, pencatatan log terstruktur (`log/slog`), metrik Prometheus / OpenTelemetry, penanganan error retryable, enkui batch satu transaksi DB, dan propagasi context tracing, silakan kunjungi folder **[example/](example/)**.
-
-- 📖 **[Dokumentasi & Cara Menjalankan Example](example/README.md)**
-- 💻 **[Kode Sumber Aplikasi Percontohan (`example/main.go`)](example/main.go)**
-
----
-
-## 🛠️ Penanganan Job Gagal (DLQ Operations)
-
-Jika sebuah job berstatus `FAILED`, chain akan terhenti sampai ada penanganan manual:
-
-### Replay Job
-Mengembalikan job `FAILED` atau `CANCELLED` ke status `PENDING` untuk dicoba ulang:
+Jika sebuah job berstatus `FAILED`, engine menyediakan API operasional masal (*Bulk Operations*) untuk pemulihan:
 
 ```go
-err := eng.ReplayJob(ctx, failedJobID)
-```
+// Replay masal job di DLQ
+replayed, err := eng.BulkReplayDLQ(ctx, orderedjob.JobFilter{Status: orderedjob.StatusFailed})
 
-### Skip Job
-Menandai job `FAILED` sebagai `COMPLETED` agar urutan berikutnya dapat dilanjutkan:
-
-```go
-err := eng.SkipJob(ctx, failedJobID)
+// Skip masal job di DLQ
+skipped, err := eng.BulkSkipDLQ(ctx, orderedjob.JobFilter{JobType: "LegacyTask"})
 ```
 
 ---
 
-## ⚙️ Opsi Konfigurasi Engine
+## 🧪 Testing & Benchmarks
 
-| Option | Deskripsi | Default |
-| :--- | :--- | :--- |
-| `WithConcurrency(n)` | Jumlah worker goroutine | `10` |
-| `WithPollInterval(d)` | Interval polling fallback (dengan random jitter) | `500ms` |
-| `WithLease(d)` | Durasi sewa job per worker (heartbeat = lease/3) | `60s` |
-| `WithRetryPolicy(p)` | Konfigurasi backoff retry (`MaxAttempts`, `BaseDelay`, `MaxDelay`, `Jitter`) | `Max 5, Base 1s, Max 5m` |
-| `WithSlogLogger(l)` | Integrasi `log/slog` | `NoopLogger` |
-| `WithMetrics(m)` | Integrasi Prometheus / OpenTelemetry Metrics | `NoopMetrics` |
-
----
-
-## 🧪 Testing
-
-Gunakan adapter `memory` untuk unit testing tanpa database:
-
-```go
-import "github.com/semmidev/orderedjob/repository/memory"
-
-repo := memory.New()
-eng := orderedjob.New(repo, orderedjob.WithConcurrency(5))
-```
-
-Menjalankan test dan linter:
+Menjalankan suite unit test:
 
 ```bash
 make test
-make lint
+# atau
+go test -v ./...
+```
+
+Menjalankan suite benchmark performa skala besar (**100.000 Concurrent Chains** & **Lock Contention**):
+
+```bash
+make bench
+# atau
+go test -bench=. -benchmem ./...
 ```
 
 ---

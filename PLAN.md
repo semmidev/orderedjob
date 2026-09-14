@@ -162,7 +162,7 @@ Memastikan pustaka teruji dalam kondisi paling ekstrim sebelum dirilis ke lingku
 - [ ] **Database Connection Loss & Reconnect Test**: Pengujian resiliensi worker pool saat koneksi database terputus dan terhubung kembali secara tiba-tiba.
 
 ### 7.2 Scalability & Lock Contention Benchmarks
-- [ ] **High-Concurrency Benchmarks**: Suite pengujian performa skala besar (100.000 concurrent chains) untuk mengukur throughput klaim dan mengdeteksi potensi *deadlock* pada Advisory Lock.
+- [x] **High-Concurrency Benchmarks**: Suite pengujian performa skala besar (100.000 concurrent chains) untuk mengukur throughput klaim dan mengdeteksi potensi *deadlock* pada Advisory Lock.
 
 ---
 
