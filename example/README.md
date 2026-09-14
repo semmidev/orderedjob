@@ -4,8 +4,8 @@ Aplikasi contoh yang menunjukkan penggunaan lengkap pustaka `orderedjob` dengan 
 
 ## Prasyarat
 
-- **Go 1.22+**
-- **Docker & Docker Compose** (atau instance PostgreSQL / SQL Server lokal)
+-  **Go 1.22+**
+-  **Docker & Docker Compose** (atau instance PostgreSQL / SQL Server lokal)
 
 ## Cara Menjalankan
 
@@ -16,8 +16,8 @@ docker compose up -d
 ```
 
 Perintah di atas akan menjalankan:
-- **PostgreSQL**: Port `5432` (`orderedjob` DB, user `postgres`, password `postgres`)
-- **Microsoft SQL Server**: Port `1433` (user `sa`, password `StrongPassword123!`)
+-  **PostgreSQL**: Port `5432` (`orderedjob` DB, user `postgres`, password `postgres`)
+-  **Microsoft SQL Server**: Port `1433` (user `sa`, password `StrongPassword123!`)
 
 ### 2. Pilih Database Engine via Flag `-db`
 
@@ -56,9 +56,9 @@ http://localhost:8080/ui
 ```
 
 Dashboard menyediakan:
-- Monitoring job secara real-time
-- Filter berdasarkan status, job type, dan chain
-- **Enqueue New Job** dengan dropdown Job Type yang otomatis terisi dari handler yang telah didaftarkan
+-  Monitoring job secara real-time
+-  Filter berdasarkan status, job type, dan chain
+-  **Enqueue New Job** dengan dropdown Job Type yang otomatis terisi dari handler yang telah didaftarkan
 
 ### 5. Hentikan Container Database
 
@@ -85,43 +85,43 @@ main()
 ## Fitur-Fitur Utama yang Ditunjukkan (`main.go`)
 
 ### 1. Multi-Database Persistence & Otomatisasi Skema
-- **PostgreSQL Repository (`pgRepo.New`)**: Menggunakan connection pool `pgxpool.Pool`.
-- **SQL Server Repository (`mssqlRepo.New`)**: Menggunakan `database/sql` dan T-SQL `UPDLOCK, READPAST`.
-- **Auto Migration**: Menjalankan migrasi DDL tabel `ordered_jobs` secara otomatis via `repo.Migrate(ctx)`.
+-  **PostgreSQL Repository (`pgRepo.New`)**: Menggunakan connection pool `pgxpool.Pool`.
+-  **SQL Server Repository (`mssqlRepo.New`)**: Menggunakan `database/sql` dan T-SQL `UPDLOCK, READPAST`.
+-  **Auto Migration**: Menjalankan migrasi DDL tabel `ordered_jobs` secara otomatis via `repo.Migrate(ctx)`.
 
 ### 2. Konfigurasi Engine & Worker Pool
-- **`WithConcurrency(5)`**: Menjalankan 5 worker goroutine secara paralel.
-- **`WithPollInterval(100ms)`**: Interval polling job yang responsif.
-- **`WithLease(15s)`**: Batas waktu kepemilikan lock job sebelum dianggap stale.
-- **`WithSlogLogger(logger)`**: Integrasi terstruktur dengan `log/slog` bawaan Go.
-- **`WithNotify(true)`**: Bangunkan worker secara cepat saat job baru datang.
-- **`WithRetryPolicy(...)`**: Strategi retry berbasis exponential backoff dengan jitter.
+-  **`WithConcurrency(5)`**: Menjalankan 5 worker goroutine secara paralel.
+-  **`WithPollInterval(100ms)`**: Interval polling job yang responsif.
+-  **`WithLease(15s)`**: Batas waktu kepemilikan lock job sebelum dianggap stale.
+-  **`WithSlogLogger(logger)`**: Integrasi terstruktur dengan `log/slog` bawaan Go.
+-  **`WithNotify(true)`**: Bangunkan worker secara cepat saat job baru datang.
+-  **`WithRetryPolicy(...)`**: Strategi retry berbasis exponential backoff dengan jitter.
 
 ### 3. Pendaftaran Handler (Type-Safe Generics & Dynamic)
-- **`RegisterTyped[T]`**: Handler dengan deserialisasi payload JSON otomatis via Go Generics.
-- **`RegisterFunc`**: Handler langsung menggunakan `json.RawMessage` (contoh: `AuditLog`).
-- **`Engine.JobTypes()`**: Mengekspos daftar job type yang terdaftar agar UI dapat menampilkan dropdown.
+-  **`RegisterTyped[T]`**: Handler dengan deserialisasi payload JSON otomatis via Go Generics.
+-  **`RegisterFunc`**: Handler langsung menggunakan `json.RawMessage` (contoh: `AuditLog`).
+-  **`Engine.JobTypes()`**: Mengekspos daftar job type yang terdaftar agar UI dapat menampilkan dropdown.
 
 ### 4. Web UI & API Endpoints
-- **`/api/job-types`**: Mengembalikan daftar job type yang terdaftar di engine (digunakan oleh dropdown modal Enqueue).
-- **`ui.WithJobTypesProvider(eng)`**: Menghubungkan engine ke UI agar job types tersedia sejak server pertama kali naik.
+-  **`/api/job-types`**: Mengembalikan daftar job type yang terdaftar di engine (digunakan oleh dropdown modal Enqueue).
+-  **`ui.WithJobTypesProvider(eng)`**: Menghubungkan engine ke UI agar job types tersedia sejak server pertama kali naik.
 
 ### 5. Distributed Tracing (Trace Context Propagation)
-- **`WithTraceID(ctx, traceID)`**: Menyisipkan trace ID ke dalam context saat enqueue.
-- **`ExtractTraceID(ctx)`**: Membaca trace ID dari context di dalam handler untuk korelasi log end-to-end.
+-  **`WithTraceID(ctx, traceID)`**: Menyisipkan trace ID ke dalam context saat enqueue.
+-  **`ExtractTraceID(ctx)`**: Membaca trace ID dari context di dalam handler untuk korelasi log end-to-end.
 
 ### 6. Penanganan Error Transien vs Permanen
-- **`orderedjob.Retryable(err)`**: Menandai error transien agar worker melakukan retry.
-- **Error non-retryable**: Job langsung dipindahkan ke status terminal tanpa retry.
+-  **`orderedjob.Retryable(err)`**: Menandai error transien agar worker melakukan retry.
+-  **Error non-retryable**: Job langsung dipindahkan ke status terminal tanpa retry.
 
 ### 7. Jaminan Urutan FIFO & Enqueue
-- **Explicit Sequence FIFO**: Menjamin urutan eksekusi tepat sesuai `Sequence = 1, 2, 3...` per chain.
-- **Auto-Sequence (`Sequence = 0`)**: Menggenerasi indeks urutan berikutnya secara otomatis di sisi database.
-- **Idempotency Key**: Mencegah duplikasi enqueue akibat percobaan ulang client.
-- **Multi-Tenant (`TenantID`)**: Mengisolasi eksekusi antar tenant.
+-  **Explicit Sequence FIFO**: Menjamin urutan eksekusi tepat sesuai `Sequence = 1, 2, 3...` per chain.
+-  **Auto-Sequence (`Sequence = 0`)**: Menggenerasi indeks urutan berikutnya secara otomatis di sisi database.
+-  **Idempotency Key**: Mencegah duplikasi enqueue akibat percobaan ulang client.
+-  **Multi-Tenant (`TenantID`)**: Mengisolasi eksekusi antar tenant.
 
 ### 8. Graceful Shutdown
-- **`eng.Shutdown(ctx)`**: Menghentikan pengambilan job baru dan menunggu pekerjaan yang sedang berjalan selesai.
+-  **`eng.Shutdown(ctx)`**: Menghentikan pengambilan job baru dan menunggu pekerjaan yang sedang berjalan selesai.
 
 ---
 

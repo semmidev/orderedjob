@@ -1,31 +1,31 @@
-# 📖 Panduan Lengkap & Cetak Biru Fitur (`GUIDE.md`)
+# Panduan Lengkap & Cetak Biru Fitur (`GUIDE.md`)
 
 Selamat datang di panduan resmi penggunaan **`orderedjob`**. Dokumen ini dirancang sebagai referensi komprehensif yang menjelaskan **setiap opsi konfigurasi, parameter API, fungsi, efek samping (*side effects*)**, serta skenario penggunaan dari tingkat paling dasar (*basic*) hingga tingkat mahir (*enterprise advanced*).
 
 ---
 
-## 📌 Daftar Isi
+## Daftar Isi
 
-- [🗂️ Kamus Referensi Opsi Engine & API Parameter](#️-kamus-referensi-opsi-engine--api-parameter)
-- [1. Skenario 1: Dasar & In-Memory Quickstart](#1-skenario-1-dasar--in-memory-quickstart)
-- [2. Skenario 2: Auto-Sequence & Multi-Step Ordering](#2-skenario-2-auto-sequence--multi-step-ordering)
-- [3. Skenario 3: Multi-Database Production Engine (PostgreSQL & SQL Server)](#3-skenario-3-multi-database-production-engine-postgresql--sql-server)
-- [4. Skenario 4: Policy-Driven Ordering Modes & Dynamic Strategy Resolver](#4-skenario-4-policy-driven-ordering-modes--dynamic-strategy-resolver)
-- [5. Skenario 5: Penanganan Error, Kebijakan Retry & Exponential Backoff Jitter](#5-skenario-5-penanganan-error-kebijakan-retry--exponential-backoff-jitter)
-- [6. Skenario 6: Worker Panic Recovery Isolation & Interceptor](#6-skenario-6-worker-panic-recovery-isolation--interceptor)
-- [7. Skenario 7: Type-Safe Handlers & Struct Schema Validation](#7-skenario-7-type-safe-handlers--struct-schema-validation)
-- [8. Skenario 8: Scheduled & Delayed Job Management](#8-skenario-8-scheduled--delayed-job-management)
-- [9. Skenario 9: Enterprise Observability (OpenTelemetry Tracing & Metrics)](#9-skenario-9-enterprise-observability-opentelemetry-tracing--metrics)
-- [10. Skenario 10: Event Callback Listeners & HTTP Webhook Dispatcher](#10-skenario-10-event-callback-listeners--http-webhook-dispatcher)
-- [11. Skenario 11: Manajemen DLQ Lanjutan & Bulk Operations API](#11-skenario-11-manajemen-dlq-lanjutan--bulk-operations-api)
-- [12. Skenario 12: Web UI Dashboard & Real-Time SSE Streaming](#12-skenario-12-web-ui-dashboard--real-time-sse-streaming)
-- [13. Skenario 13: End-to-End Enterprise Master Pipeline (Semua Fitur Digabung)](#13-skenario-13-end-to-end-enterprise-master-pipeline-semua-fitur-digabung)
+-  [Kamus Referensi Opsi Engine & API Parameter](#kamus-referensi-opsi-engine--api-parameter)
+-  [1. Skenario 1: Dasar & In-Memory Quickstart](#1-skenario-1-dasar--in-memory-quickstart)
+-  [2. Skenario 2: Auto-Sequence & Multi-Step Ordering](#2-skenario-2-auto-sequence--multi-step-ordering)
+-  [3. Skenario 3: Multi-Database Production Engine (PostgreSQL & SQL Server)](#3-skenario-3-multi-database-production-engine-postgresql--sql-server)
+-  [4. Skenario 4: Policy-Driven Ordering Modes & Dynamic Strategy Resolver](#4-skenario-4-policy-driven-ordering-modes--dynamic-strategy-resolver)
+-  [5. Skenario 5: Penanganan Error, Kebijakan Retry & Exponential Backoff Jitter](#5-skenario-5-penanganan-error-kebijakan-retry--exponential-backoff-jitter)
+-  [6. Skenario 6: Worker Panic Recovery Isolation & Interceptor](#6-skenario-6-worker-panic-recovery-isolation--interceptor)
+-  [7. Skenario 7: Type-Safe Handlers & Struct Schema Validation](#7-skenario-7-type-safe-handlers--struct-schema-validation)
+-  [8. Skenario 8: Scheduled & Delayed Job Management](#8-skenario-8-scheduled--delayed-job-management)
+-  [9. Skenario 9: Enterprise Observability (OpenTelemetry Tracing & Metrics)](#9-skenario-9-enterprise-observability-opentelemetry-tracing--metrics)
+-  [10. Skenario 10: Event Callback Listeners & HTTP Webhook Dispatcher](#10-skenario-10-event-callback-listeners--http-webhook-dispatcher)
+-  [11. Skenario 11: Manajemen DLQ Lanjutan & Bulk Operations API](#11-skenario-11-manajemen-dlq-lanjutan--bulk-operations-api)
+-  [12. Skenario 12: Web UI Dashboard & Real-Time SSE Streaming](#12-skenario-12-web-ui-dashboard--real-time-sse-streaming)
+-  [13. Skenario 13: End-to-End Enterprise Master Pipeline (Semua Fitur Digabung)](#13-skenario-13-end-to-end-enterprise-master-pipeline-semua-fitur-digabung)
 
 ---
 
-## 🗂️ Kamus Referensi Opsi Engine & API Parameter
+## Kamus Referensi Opsi Engine & API Parameter
 
-### ⚙️ Matriks Opsi Engine (`orderedjob.Option`)
+### Matriks Opsi Engine (`orderedjob.Option`)
 
 Tabel berikut menjelaskan seluruh 19 parameter konfigurasi `orderedjob.Option` yang tersedia saat menginisialisasi engine via `orderedjob.New(repo, opts...)`:
 
@@ -53,7 +53,7 @@ Tabel berikut menjelaskan seluruh 19 parameter konfigurasi `orderedjob.Option` y
 
 ---
 
-### 📦 Parameter `orderedjob.EnqueueRequest`
+### Parameter `orderedjob.EnqueueRequest`
 
 | Parameter Field | Tipe Data | Wajib/Opsional | Deskripsi & Fungsi |
 | :--- | :--- | :--- | :--- |
@@ -71,7 +71,7 @@ Tabel berikut menjelaskan seluruh 19 parameter konfigurasi `orderedjob.Option` y
 
 ---
 
-### 🔍 Parameter Filter `orderedjob.JobFilter` (DLQ & Searching)
+### Parameter Filter `orderedjob.JobFilter` (DLQ & Searching)
 
 | Filter Field | Tipe Data | Deskripsi & Fungsi |
 | :--- | :--- | :--- |
@@ -90,20 +90,20 @@ Tabel berikut menjelaskan seluruh 19 parameter konfigurasi `orderedjob.Option` y
 
 ## 1. Skenario 1: Dasar & In-Memory Quickstart
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menjalankan `orderedjob` menggunakan adapter memori (`repository/memory`) tanpa dependensi database eksternal. Cocok untuk unit testing, pengujian lokal, atau pemrosesan antrean internal aplikasi.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `memory.New()`: Inisialisasi storage in-memory berbasis Go struct & muteks.
-- `WithConcurrency(5)`: Mengonfigurasi 5 worker goroutines.
-- `WithPollInterval(100*time.Millisecond)`: Mengatur interval polling scanner ke 100ms.
-- `RegisterTyped[T]`: Mendaftarkan fungsi handler *type-safe* dengan unmarshaling JSON otomatis.
+### Konfigurasi & Opsi Terlibat
+-  `memory.New()`: Inisialisasi storage in-memory berbasis Go struct & muteks.
+-  `WithConcurrency(5)`: Mengonfigurasi 5 worker goroutines.
+-  `WithPollInterval(100*time.Millisecond)`: Mengatur interval polling scanner ke 100ms.
+-  `RegisterTyped[T]`: Mendaftarkan fungsi handler *type-safe* dengan unmarshaling JSON otomatis.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Data antrean disimpan di RAM volatil. Restart aplikasi akan menghapus seluruh data antrean.
-- Penguncian rantai dilakukan di memori lokal (tidak terdistribusi antar node).
+### Efek Samping (*Side Effects*)
+-  Data antrean disimpan di RAM volatil. Restart aplikasi akan menghapus seluruh data antrean.
+-  Penguncian rantai dilakukan di memori lokal (tidak terdistribusi antar node).
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -167,19 +167,19 @@ func main() {
 
 ## 2. Skenario 2: Auto-Sequence & Multi-Step Ordering
 
-### 🎯 Fungsi Utama
-Pengalokasian penomoran urutan otomatis (`Sequence = 0`) tanpa perlu menghitung manual sequence dari sisi aplikasi pengirim. Engine mengeksekusi *Advisory Lock* aman untuk menjamin urutan bertahap (*Step 1 ➔ Step 2 ➔ Step 3*).
+### Fungsi Utama
+Pengalokasian penomoran urutan otomatis (`Sequence = 0`) tanpa perlu menghitung manual sequence dari sisi aplikasi pengirim. Engine mengeksekusi *Advisory Lock* aman untuk menjamin urutan bertahap (*Step 1  Step 2  Step 3*).
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `Sequence: 0`: Memicu mekanisme *Auto-Sequence Allocation*.
-- **PostgreSQL**: `SELECT pg_advisory_xact_lock(hashtext(chain_id))`.
-- **SQL Server**: `EXEC sp_getapplock @Resource = chainID`.
+### Konfigurasi & Opsi Terlibat
+-  `Sequence: 0`: Memicu mekanisme *Auto-Sequence Allocation*.
+-  **PostgreSQL**: `SELECT pg_advisory_xact_lock(hashtext(chain_id))`.
+-  **SQL Server**: `EXEC sp_getapplock @Resource = chainID`.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Mengambil penguncian eksklusif singkat pada database per `chain_id` saat enkui untuk mencegah *race condition* nomor urutan.
-- Job berikutnya (`Sequence N+1`) akan berstatus **`BLOCKED`** sampai job sebelumnya (`Sequence N`) berstatus **`COMPLETED`**.
+### Efek Samping (*Side Effects*)
+-  Mengambil penguncian eksklusif singkat pada database per `chain_id` saat enkui untuk mencegah *race condition* nomor urutan.
+-  Job berikutnya (`Sequence N+1`) akan berstatus **`BLOCKED`** sampai job sebelumnya (`Sequence N`) berstatus **`COMPLETED`**.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -236,21 +236,21 @@ func main() {
 
 ## 3. Skenario 3: Multi-Database Production Engine (PostgreSQL & SQL Server)
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menhubungkan `orderedjob` ke database relational skala produksi (**PostgreSQL** atau **Microsoft SQL Server**) dengan isolasi *fencing token* (`lease_generation`) dan pemindahan state terdistribusi.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `postgres.New(pool)`: Adapter PostgreSQL berbasis driver `pgxpool.Pool`.
-- `sqlserver.New(db)`: Adapter SQL Server berbasis driver standard `*sql.DB` (`go-mssqldb`).
-- `repo.Migrate(ctx)`: Mengeksekusi DDL migrasi otomatis pemuatan tabel `ordered_jobs` dan indeks parsial.
-- `WithNotify(true)`: Mendengarkan event PostgreSQL `LISTEN/NOTIFY` untuk latensi klaim `< 5ms`.
-- `WithLease(30*time.Second)`: Durasi sewa eksklusif per worker.
-- `WithRecoveryInterval(5*time.Second)`: Pemindaian job tertinggal dari worker mati.
+### Konfigurasi & Opsi Terlibat
+-  `postgres.New(pool)`: Adapter PostgreSQL berbasis driver `pgxpool.Pool`.
+-  `sqlserver.New(db)`: Adapter SQL Server berbasis driver standard `*sql.DB` (`go-mssqldb`).
+-  `repo.Migrate(ctx)`: Mengeksekusi DDL migrasi otomatis pemuatan tabel `ordered_jobs` dan indeks parsial.
+-  `WithNotify(true)`: Mendengarkan event PostgreSQL `LISTEN/NOTIFY` untuk latensi klaim `< 5ms`.
+-  `WithLease(30*time.Second)`: Durasi sewa eksklusif per worker.
+-  `WithRecoveryInterval(5*time.Second)`: Pemindaian job tertinggal dari worker mati.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Kueri klaim menggunakan `FOR UPDATE SKIP LOCKED` (PostgreSQL) atau `WITH (UPDLOCK, READPAST)` (SQL Server) yang mengisolasi baris job aktif tanpa memblokir koneksi DB lainnya.
+### Efek Samping (*Side Effects*)
+-  Kueri klaim menggunakan `FOR UPDATE SKIP LOCKED` (PostgreSQL) atau `WITH (UPDLOCK, READPAST)` (SQL Server) yang mengisolasi baris job aktif tanpa memblokir koneksi DB lainnya.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -314,21 +314,21 @@ func runSQLServerEngine(ctx context.Context, connString string) {
 
 ## 4. Skenario 4: Policy-Driven Ordering Modes & Dynamic Strategy Resolver
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menyesuaikan perilaku penanganan urutan rantai (*chain ordering*) saat terjadi kegagalan job.
 
-### ⚙️ Pilihan Mode Urutan
+### Pilihan Mode Urutan
 1. **`OrderingModeStrict` (`"strict"`)**: (Default) Jika Job `N-1` gagal, chain **terhenti** (`BLOCKED`) untuk keamanan data sekuensial.
 2. **`OrderingModeSkipOnFailure` (`"skip-on-failure"`)**: Jika Job `N-1` gagal terminal, engine otomatis melewatinya dan membuka Job `N` ke `PENDING`.
 3. **`OrderingModeDeadLetterAndContinue` (`"dead-letter-and-continue"`)**: Mengisolasi Job `N-1` ke DLQ tanpa menahan urutan Job `N`.
 
-### ⚙️ Dynamic Strategy Resolver
-- `WithOrderingStrategy(func(req EnqueueRequest) string)`: Menentukan mode urutan secara dinamis per `job_type`, `tenant_id`, atau atribut request.
+### Dynamic Strategy Resolver
+-  `WithOrderingStrategy(func(req EnqueueRequest) string)`: Menentukan mode urutan secara dinamis per `job_type`, `tenant_id`, atau atribut request.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Mode `skip-on-failure` atau `dead-letter-and-continue` mengizinkan eksekusi job berikutnya meskipun langkah sebelumnya gagal. Pastikan logika aplikasi Anda tahan terhadap langkah parsial yang terlewati.
+### Efek Samping (*Side Effects*)
+-  Mode `skip-on-failure` atau `dead-letter-and-continue` mengizinkan eksekusi job berikutnya meskipun langkah sebelumnya gagal. Pastikan logika aplikasi Anda tahan terhadap langkah parsial yang terlewati.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -382,22 +382,22 @@ func main() {
 
 ## 5. Skenario 5: Penanganan Error, Kebijakan Retry & Exponential Backoff Jitter
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Mengendalikan penanganan eror transien (seperti penundaan jaringan/timeout API) dengan *exponential backoff + random jitter* agar tidak membebankan layanan eksternal.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `orderedjob.Retryable(err)`: Menandai eror sebagai kesalahan transien yang wajib di-retry.
-- `orderedjob.NonRetryable(err)`: Menandai eror sebagai kesalahan terminal yang langsung menghentikan job ke `FAILED`.
-- `WithRetryPolicy(retry.Policy{...})`:
-  - `MaxAttempts`: Batas percobaan ulang.
-  - `BaseDelay`: Penundaan awal.
-  - `MaxDelay`: Batas maksimum penundaan.
-  - `Jitter`: Option `retry.NoJitter`, `retry.FullJitter`, atau `retry.EqualJitter`.
+### Konfigurasi & Opsi Terlibat
+-  `orderedjob.Retryable(err)`: Menandai eror sebagai kesalahan transien yang wajib di-retry.
+-  `orderedjob.NonRetryable(err)`: Menandai eror sebagai kesalahan terminal yang langsung menghentikan job ke `FAILED`.
+-  `WithRetryPolicy(retry.Policy{...})`:
+  -  `MaxAttempts`: Batas percobaan ulang.
+  -  `BaseDelay`: Penundaan awal.
+  -  `MaxDelay`: Batas maksimum penundaan.
+  -  `Jitter`: Option `retry.NoJitter`, `retry.FullJitter`, atau `retry.EqualJitter`.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Job yang di-retry akan berstatus `RETRYING` dan `available_at` diperbarui ke masa depan. Selama masa backoff, urutan berikutnya (`Sequence N+1`) tetap aman di status `BLOCKED`.
+### Efek Samping (*Side Effects*)
+-  Job yang di-retry akan berstatus `RETRYING` dan `available_at` diperbarui ke masa depan. Selama masa backoff, urutan berikutnya (`Sequence N+1`) tetap aman di status `BLOCKED`.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -459,17 +459,17 @@ func main() {
 
 ## 6. Skenario 6: Worker Panic Recovery Isolation & Interceptor
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menangkap *unhandled runtime panic* (misal: *nil pointer dereference*) pada kode handler bisnis agar tidak menyebabkan worker pool atau proses aplikasi utama mengalami *crash*.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `WithPanicHandler(func(ctx, job, panicVal, stack) error)`: Interceptor kustom untuk menangkap objek panic dan *stacktrace* mentah.
-- `WithRetryOnPanic(true)`: Mengizinkan percobaan ulang (retry) jika handler memicu panic.
+### Konfigurasi & Opsi Terlibat
+-  `WithPanicHandler(func(ctx, job, panicVal, stack) error)`: Interceptor kustom untuk menangkap objek panic dan *stacktrace* mentah.
+-  `WithRetryOnPanic(true)`: Mengizinkan percobaan ulang (retry) jika handler memicu panic.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Jika `WithRetryOnPanic(false)` (default), panic akan langsung diubah menjadi status `FAILED` dengan *stack trace* lengkap dicatat pada kolom `last_error`.
+### Efek Samping (*Side Effects*)
+-  Jika `WithRetryOnPanic(false)` (default), panic akan langsung diubah menjadi status `FAILED` dengan *stack trace* lengkap dicatat pada kolom `last_error`.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -490,7 +490,7 @@ func main() {
 	eng := orderedjob.New(repo,
 		orderedjob.WithConcurrency(2),
 		orderedjob.WithPanicHandler(func(ctx context.Context, job orderedjob.Job, panicVal any, stack []byte) error {
-			fmt.Printf("🚨 [PANIC INTERCEPTED] JobID: %s | Panic: %v\n", job.ID, panicVal)
+			fmt.Printf(" [PANIC INTERCEPTED] JobID: %s | Panic: %v\n", job.ID, panicVal)
 			return orderedjob.NonRetryable(fmt.Errorf("recovered panic: %v", panicVal))
 		}),
 		orderedjob.WithRetryOnPanic(false),
@@ -515,15 +515,15 @@ func main() {
 
 ## 7. Skenario 7: Type-Safe Handlers & Struct Schema Validation
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Melakukan validasi skema isi *payload* JSON sebelum handler dieksekusi. Jika payload tidak valid, job akan langsung ditolak sebelum menjalankan logika bisnis utama.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
+### Konfigurasi & Opsi Terlibat
 1. **Interface `Validator`**: Implementasi metode `Validate() error` pada struct payload.
 2. **Interface `ValidatorCtx`**: Implementasi metode `ValidateCtx(ctx) error` pada struct payload.
 3. **`RegisterTypedWithValidator[T]`**: Menentukan fungsi validator kustom secara eksplisit saat pendaftaran.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -581,18 +581,18 @@ func main() {
 
 ## 8. Skenario 8: Scheduled & Delayed Job Management
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menunda eksekusi pekerjaan ke titik waktu tertentu di masa depan (`AvailableAt`), atau mengubah waktu penjadwalan secara dinamis (`RescheduleJob`).
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `eng.Schedule(ctx, req, runAt)`: Menjadwalkan eksekusi tepat pada timestamp `runAt`.
-- `eng.EnqueueDelayed(ctx, req, delay)`: Menjadwalkan eksekusi setelah durasi `delay`.
-- `eng.RescheduleJob(ctx, jobID, newAvailableAt)`: Memperbarui timestamp `AvailableAt` dari job yang sudah ada.
+### Konfigurasi & Opsi Terlibat
+-  `eng.Schedule(ctx, req, runAt)`: Menjadwalkan eksekusi tepat pada timestamp `runAt`.
+-  `eng.EnqueueDelayed(ctx, req, delay)`: Menjadwalkan eksekusi setelah durasi `delay`.
+-  `eng.RescheduleJob(ctx, jobID, newAvailableAt)`: Memperbarui timestamp `AvailableAt` dari job yang sudah ada.
 
-### ⚠️ Efek Samping (*Side Effects*)
-- Job yang dijadwalkan di masa depan tidak akan diklaim oleh scanner sampai timestamp `AvailableAt <= NOW()`.
+### Efek Samping (*Side Effects*)
+-  Job yang dijadwalkan di masa depan tidak akan diklaim oleh scanner sampai timestamp `AvailableAt <= NOW()`.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -612,7 +612,7 @@ func main() {
 	eng := orderedjob.New(repo, orderedjob.WithConcurrency(2))
 
 	orderedjob.RegisterTyped(eng, "Reminder", func(ctx context.Context, job orderedjob.Job, payload map[string]string) error {
-		fmt.Printf("🔔 [REMINDER FIRED] Text: %s at %s\n", payload["text"], time.Now().Format("15:04:05"))
+		fmt.Printf(" [REMINDER FIRED] Text: %s at %s\n", payload["text"], time.Now().Format("15:04:05"))
 		return nil
 	})
 
@@ -638,17 +638,17 @@ func main() {
 
 ## 9. Skenario 9: Enterprise Observability (OpenTelemetry Tracing & Metrics)
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Integrasi native dengan **OpenTelemetry (OTel)** dan **Prometheus** untuk penelusuran terdistribusi (*Distributed Tracing W3C TraceContext*) serta pengumpulan metrik performa antrean.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `orderedjob.WithTraceID(ctx, "trace-id")`: Menyisipkan Trace ID pada penyerahan request.
-- `orderedjob.ExtractTraceID(ctx)`: Membaca Trace ID di dalam worker handler.
-- `orderedjob.NewOTelMetrics(meterProvider)`: Ekspor metrik standar OpenTelemetry/Prometheus.
-- `WithSlogLogger(slogLogger)`: Integrasi pencatatan log terstruktur `log/slog`.
-- `WithTracer(tracer)`: Mendaftarkan Tracer OpenTelemetry.
+### Konfigurasi & Opsi Terlibat
+-  `orderedjob.WithTraceID(ctx, "trace-id")`: Menyisipkan Trace ID pada penyerahan request.
+-  `orderedjob.ExtractTraceID(ctx)`: Membaca Trace ID di dalam worker handler.
+-  `orderedjob.NewOTelMetrics(meterProvider)`: Ekspor metrik standar OpenTelemetry/Prometheus.
+-  `WithSlogLogger(slogLogger)`: Integrasi pencatatan log terstruktur `log/slog`.
+-  `WithTracer(tracer)`: Mendaftarkan Tracer OpenTelemetry.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -710,15 +710,15 @@ func main() {
 
 ## 10. Skenario 10: Event Callback Listeners & HTTP Webhook Dispatcher
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Mendengarkan *event lifecycle* antrean (seperti kegagalan job atau rantai yang terblokir) untuk memicu pemanggilan webhook HTTP atau alert Slack secara otomatis.
 
-### ⚙️ Konfigurasi & Opsi Terlibat
-- `WithEventListener(customListener)`: Callback interface bawaan.
-- `WithDLQThreshold(10)`: Memicu event `OnDLQThresholdExceeded` jika job gagal mencapai 10.
-- `WithWebhook(WebhookConfig{URL, Secret, Timeout})`: Dispatcher notifikasi webhook HTTP otomatis.
+### Konfigurasi & Opsi Terlibat
+-  `WithEventListener(customListener)`: Callback interface bawaan.
+-  `WithDLQThreshold(10)`: Memicu event `OnDLQThresholdExceeded` jika job gagal mencapai 10.
+-  `WithWebhook(WebhookConfig{URL, Secret, Timeout})`: Dispatcher notifikasi webhook HTTP otomatis.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -737,14 +737,14 @@ type CustomEventListener struct{}
 func (l CustomEventListener) OnJobClaimed(job orderedjob.Job) {}
 func (l CustomEventListener) OnJobCompleted(job orderedjob.Job, duration time.Duration) {}
 func (l CustomEventListener) OnJobFailed(job orderedjob.Job, err error) {
-	fmt.Printf("⚠️ [ALERT] Job %s pada Chain %s GAGAL: %v\n", job.ID, job.ChainID, err)
+	fmt.Printf(" [ALERT] Job %s pada Chain %s GAGAL: %v\n", job.ID, job.ChainID, err)
 }
 func (l CustomEventListener) OnJobRetrying(job orderedjob.Job, attempt int, nextAvailable time.Time) {}
 func (l CustomEventListener) OnChainBlocked(chainID string, blockedJob orderedjob.Job) {
-	fmt.Printf("🛑 [CHAIN BLOCKED] Chain %s terhenti akibat Job %s!\n", chainID, blockedJob.ID)
+	fmt.Printf(" [CHAIN BLOCKED] Chain %s terhenti akibat Job %s!\n", chainID, blockedJob.ID)
 }
 func (l CustomEventListener) OnDLQThresholdExceeded(dlqCount int64) {
-	fmt.Printf("🚨 [DLQ ALERT] Jumlah job gagal mencapai ambang batas: %d\n", dlqCount)
+	fmt.Printf(" [DLQ ALERT] Jumlah job gagal mencapai ambang batas: %d\n", dlqCount)
 }
 
 func main() {
@@ -770,18 +770,18 @@ func main() {
 
 ## 11. Skenario 11: Manajemen DLQ Lanjutan & Bulk Operations API
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Menyediakan operasi masal (*Bulk Operations*) untuk mengelola job gagal pada Dead Letter Queue (DLQ) tanpa perlu memanipulasi database secara manual.
 
-### ⚙️ Fitur & Operasi API
-- `eng.ReplayJob(ctx, jobID)`: Mencoba ulang 1 job gagal.
-- `eng.SkipJob(ctx, jobID)`: Menandai 1 job gagal sebagai `COMPLETED` untuk membuka unblock `Sequence N+1`.
-- `eng.BulkReplayDLQ(ctx, filter)`: Memulai *replay* masal berdasarkan kriteria filter.
-- `eng.BulkSkipDLQ(ctx, filter)`: Menandai *skip* masal untuk ribuan job gagal.
-- `eng.BulkPurgeDLQ(ctx, filter)`: Menghapus masal job gagal lama dari DLQ.
-- `eng.ReplayJobWithPayload(ctx, jobID, newJSONPayload)`: Memperbaiki isi payload JSON yang salah sebelum di-replay.
+### Fitur & Operasi API
+-  `eng.ReplayJob(ctx, jobID)`: Mencoba ulang 1 job gagal.
+-  `eng.SkipJob(ctx, jobID)`: Menandai 1 job gagal sebagai `COMPLETED` untuk membuka unblock `Sequence N+1`.
+-  `eng.BulkReplayDLQ(ctx, filter)`: Memulai *replay* masal berdasarkan kriteria filter.
+-  `eng.BulkSkipDLQ(ctx, filter)`: Menandai *skip* masal untuk ribuan job gagal.
+-  `eng.BulkPurgeDLQ(ctx, filter)`: Menghapus masal job gagal lama dari DLQ.
+-  `eng.ReplayJobWithPayload(ctx, jobID, newJSONPayload)`: Memperbaiki isi payload JSON yang salah sebelum di-replay.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -824,15 +824,15 @@ func main() {
 
 ## 12. Skenario 12: Web UI Dashboard & Real-Time SSE Streaming
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Mengintegrasikan dashboard antarmuka web interaktif (`/ui`) ke dalam server HTTP Go milik Anda dengan pembaruan grafik dan statistik real-time berbasis **Server-Sent Events (SSE)**.
 
-### ⚙️ Endpoint UI & Options
-- `ui.New(eng)`: Menginstansiasi HTTP handler dashboard Web UI.
-- `ui.WithPrefix("/admin/queue")`: Mengubah prefix path URL rute Web UI.
-- Endpoint `/ui/events`: Stream SSE real-time.
+### Endpoint UI & Options
+-  `ui.New(eng)`: Menginstansiasi HTTP handler dashboard Web UI.
+-  `ui.WithPrefix("/admin/queue")`: Mengubah prefix path URL rute Web UI.
+-  Endpoint `/ui/events`: Stream SSE real-time.
 
-### 💻 Contoh Kode Go
+### Contoh Kode Go
 
 ```go
 package main
@@ -860,7 +860,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/ui/", uiHandler)
 
-	fmt.Println("🚀 Web UI Dashboard berjalan di http://localhost:8080/ui/")
+	fmt.Println(" Web UI Dashboard berjalan di http://localhost:8080/ui/")
 	_ = http.ListenAndServe(":8080", mux)
 }
 ```
@@ -869,10 +869,10 @@ func main() {
 
 ## 13. Skenario 13: End-to-End Enterprise Master Pipeline (Semua Fitur Digabung)
 
-### 🎯 Fungsi Utama
+### Fungsi Utama
 Cetak birut aplikasi *production-ready* kelas *enterprise* yang menggabungkan seluruh fitur `orderedjob`: Multi-DB PostgreSQL migration, LISTEN/NOTIFY, OpenTelemetry Tracing, slog logger, panic isolation guard, auto-sequence, idempotency key, webhook alert, dan SSE Web UI Dashboard.
 
-### 💻 Contoh Kode Go Lengkap
+### Contoh Kode Go Lengkap
 
 ```go
 package main
