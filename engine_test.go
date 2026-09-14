@@ -294,3 +294,187 @@ func TestEngine_TraceIDContextPropagation(t *testing.T) {
 		t.Fatal("timed out waiting for trace_id extraction")
 	}
 }
+
+func TestEngine_OrderingMode_Strict(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithOrderingMode(orderedjob.OrderingModeStrict),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	var job1Attempted, job2Attempted bool
+	var mu sync.Mutex
+
+	eng.RegisterFunc("FailingJob", func(ctx context.Context, job orderedjob.Job) error {
+		mu.Lock()
+		job1Attempted = true
+		mu.Unlock()
+		return orderedjob.NonRetryable(errors.New("fatal job error"))
+	})
+	eng.RegisterFunc("NextJob", func(ctx context.Context, job orderedjob.Job) error {
+		mu.Lock()
+		job2Attempted = true
+		mu.Unlock()
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	j1, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-strict", Sequence: 1, Type: "FailingJob"})
+	require.NoError(t, err)
+	j2, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-strict", Sequence: 2, Type: "NextJob"})
+	require.NoError(t, err)
+
+	time.Sleep(300 * time.Millisecond)
+
+	mu.Lock()
+	assert.True(t, job1Attempted)
+	assert.False(t, job2Attempted, "Job 2 must NOT execute under strict mode when Job 1 fails terminally")
+	mu.Unlock()
+
+	j1Fetched, _ := eng.Get(ctx, j1.ID)
+	j2Fetched, _ := eng.Get(ctx, j2.ID)
+	assert.Equal(t, "FAILED", j1Fetched.Status)
+	assert.Equal(t, "BLOCKED", j2Fetched.Status)
+}
+
+func TestEngine_OrderingMode_SkipOnFailure(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithOrderingMode(orderedjob.OrderingModeSkipOnFailure),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	var job2Executed = make(chan struct{}, 1)
+
+	eng.RegisterFunc("FailingJob", func(ctx context.Context, job orderedjob.Job) error {
+		return orderedjob.NonRetryable(errors.New("fatal job error"))
+	})
+	eng.RegisterFunc("NextJob", func(ctx context.Context, job orderedjob.Job) error {
+		select {
+		case job2Executed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	j1, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-skip", Sequence: 1, Type: "FailingJob"})
+	require.NoError(t, err)
+	j2, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-skip", Sequence: 2, Type: "NextJob"})
+	require.NoError(t, err)
+
+	select {
+	case <-job2Executed:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("Job 2 failed to execute after Job 1 failed under skip-on-failure mode")
+	}
+
+	j1Fetched, _ := eng.Get(ctx, j1.ID)
+	j2Fetched, _ := eng.Get(ctx, j2.ID)
+	assert.Equal(t, "FAILED", j1Fetched.Status)
+	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+}
+
+func TestEngine_OrderingMode_DeadLetterAndContinue(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithOrderingMode(orderedjob.OrderingModeDeadLetterAndContinue),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	var job2Executed = make(chan struct{}, 1)
+
+	eng.RegisterFunc("FailingJob", func(ctx context.Context, job orderedjob.Job) error {
+		return orderedjob.NonRetryable(errors.New("fatal job error"))
+	})
+	eng.RegisterFunc("NextJob", func(ctx context.Context, job orderedjob.Job) error {
+		select {
+		case job2Executed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	j1, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-dlq", Sequence: 1, Type: "FailingJob"})
+	require.NoError(t, err)
+	j2, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-dlq", Sequence: 2, Type: "NextJob"})
+	require.NoError(t, err)
+
+	select {
+	case <-job2Executed:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("Job 2 failed to execute under dead-letter-and-continue mode")
+	}
+
+	j1Fetched, _ := eng.Get(ctx, j1.ID)
+	j2Fetched, _ := eng.Get(ctx, j2.ID)
+	assert.Equal(t, "DEAD_LETTERED", j1Fetched.Status)
+	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+}
+
+func TestEngine_OrderingStrategyResolver(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithOrderingStrategy(func(req orderedjob.EnqueueRequest) string {
+			if req.Type == "SkipType" {
+				return orderedjob.OrderingModeSkipOnFailure
+			}
+			return orderedjob.OrderingModeStrict
+		}),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	var job2Executed = make(chan struct{}, 1)
+
+	eng.RegisterFunc("SkipType", func(ctx context.Context, job orderedjob.Job) error {
+		return orderedjob.NonRetryable(errors.New("fatal error"))
+	})
+	eng.RegisterFunc("NextJob", func(ctx context.Context, job orderedjob.Job) error {
+		select {
+		case job2Executed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	j1, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-dyn", Sequence: 1, Type: "SkipType"})
+	require.NoError(t, err)
+	assert.Equal(t, orderedjob.OrderingModeSkipOnFailure, j1.OrderingMode)
+
+	j2, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-dyn", Sequence: 2, Type: "NextJob"})
+	require.NoError(t, err)
+
+	select {
+	case <-job2Executed:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("Job 2 failed to execute when Job 1 resolved to skip-on-failure via resolver strategy")
+	}
+
+	j2Fetched, _ := eng.Get(ctx, j2.ID)
+	assert.Equal(t, "COMPLETED", j2Fetched.Status)
+}

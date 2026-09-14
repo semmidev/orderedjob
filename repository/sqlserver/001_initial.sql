@@ -18,6 +18,7 @@ BEGIN
         tenant_id        NVARCHAR(255) NULL,
         idempotency_key  NVARCHAR(255) NULL,
         trace_id         NVARCHAR(255) NULL,
+        ordering_mode    NVARCHAR(50) NOT NULL DEFAULT 'strict',
         created_at       DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
         updated_at       DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
         started_at       DATETIMEOFFSET NULL,
@@ -26,6 +27,11 @@ BEGIN
 
         CONSTRAINT uq_ordered_jobs_chain_sequence UNIQUE (chain_id, sequence)
     );
+END;
+
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('ordered_jobs') AND name = 'ordering_mode')
+BEGIN
+    ALTER TABLE ordered_jobs ADD ordering_mode NVARCHAR(50) NOT NULL DEFAULT 'strict';
 END;
 
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_ordered_jobs_claimable')

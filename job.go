@@ -7,6 +7,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Ordering Mode Constants (Policy-Driven Execution Modes)
+const (
+	OrderingModeStrict                = "strict"
+	OrderingModeSkipOnFailure         = "skip-on-failure"
+	OrderingModeDeadLetterAndContinue = "dead-letter-and-continue"
+)
+
 // Job represents a unit of work bound to a chain.
 type Job struct {
 	ID             uuid.UUID       `json:"id"`
@@ -16,6 +23,7 @@ type Job struct {
 	Payload        json.RawMessage `json:"payload"`
 	IdempotencyKey string          `json:"idempotency_key,omitempty"`
 	TenantID       string          `json:"tenant_id,omitempty"`
+	OrderingMode   string          `json:"ordering_mode,omitempty"`
 
 	// runtime fields
 	Status          string     `json:"status"`
@@ -45,6 +53,7 @@ type EnqueueRequest struct {
 	IdempotencyKey string     `json:"idempotency_key,omitempty"`
 	TenantID       string     `json:"tenant_id,omitempty"`
 	TraceID        string     `json:"trace_id,omitempty"`
+	OrderingMode   string     `json:"ordering_mode,omitempty"`
 	MaxAttempts    int        `json:"max_attempts,omitempty"`
 	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`
 	AvailableAt    *time.Time `json:"available_at,omitempty"`

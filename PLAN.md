@@ -25,9 +25,9 @@ Aspek ini berfokus pada fleksibilitas eksekusi, pola penjadwalan, serta pencegah
 
 ### 1.1 Policy-driven Execution Modes
 Saat ini `orderedjob` mengunci chain secara ketat jika job `N-1` gagal (*strict mode*). Di sistem produksi riil, tidak semua kasus bisnis memerlukan pemblokiran total.
-- [ ] **Skip-on-Failure Policy**: Opsi konfigurasi per chain/engine untuk otomatis melanjutkan ke `N+1` jika job `N` mengalami kegagalan terminal (DLQ).
-- [ ] **Dead-Letter-and-Continue Policy**: Mengkarantina job gagal ke DLQ tanpa menahan job urutan berikutnya.
-- [ ] **Configurable Chain Ordering Strategy**: Mendukung strategi urutan dinamis per `job_type` atau per `tenant_id`.
+- [x] **Skip-on-Failure Policy**: Opsi konfigurasi per chain/engine untuk otomatis melanjutkan ke `N+1` jika job `N` mengalami kegagalan terminal (DLQ).
+- [x] **Dead-Letter-and-Continue Policy**: Mengkarantina job gagal ke DLQ tanpa menahan job urutan berikutnya.
+- [x] **Configurable Chain Ordering Strategy**: Mendukung strategi urutan dinamis per `job_type` atau per `tenant_id`.
 
 ### 1.2 Tenant & Chain-Level Fair Dispatching (Anti Noisy-Neighbor)
 Saat ini worker mengambil job berdasarkan pola global poll/claim. Jika 1 tenant meng-enqueue 1.000.000 job, tenant lain bisa mengalami kelaparan (*starvation*).

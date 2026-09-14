@@ -23,10 +23,13 @@ CREATE TABLE IF NOT EXISTS ordered_jobs (
     last_error TEXT,
     tenant_id TEXT,
     trace_id TEXT,
+    ordering_mode TEXT NOT NULL DEFAULT 'strict',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_ordered_jobs_chain_sequence UNIQUE (chain_id, sequence)
 );
+
+ALTER TABLE ordered_jobs ADD COLUMN IF NOT EXISTS ordering_mode TEXT NOT NULL DEFAULT 'strict';
 
 -- Multi-tenancy optional unique (tenant + chain + seq)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_chain_seq

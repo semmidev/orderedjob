@@ -29,7 +29,8 @@ type Engine struct {
 	recoveryInterval time.Duration
 	useNotify        bool
 	allowGap         bool
-	orderingMode     string // strict, skip-on-failure etc (future)
+	orderingMode     string // strict, skip-on-failure, dead-letter-and-continue
+	orderingStrategy OrderingStrategyResolver
 
 	// lifecycle
 	ctx      context.Context
@@ -37,6 +38,9 @@ type Engine struct {
 	wg       sync.WaitGroup
 	notifyCh chan string // for LISTEN/NOTIFY wakeup
 }
+
+// OrderingStrategyResolver resolves ordering mode per job request dynamically.
+type OrderingStrategyResolver func(req EnqueueRequest) string
 
 type Option func(*Engine)
 
@@ -77,6 +81,9 @@ func WithNotify(enabled bool) Option {
 func WithOrderingMode(mode string) Option {
 	return func(e *Engine) { e.orderingMode = mode }
 }
+func WithOrderingStrategy(s OrderingStrategyResolver) Option {
+	return func(e *Engine) { e.orderingStrategy = s }
+}
 
 func New(repo Repository, opts ...Option) *Engine {
 	e := &Engine{
@@ -90,7 +97,7 @@ func New(repo Repository, opts ...Option) *Engine {
 		concurrency:      10,
 		pollInterval:     500 * time.Millisecond,
 		recoveryInterval: 10 * time.Second,
-		orderingMode:     "strict",
+		orderingMode:     OrderingModeStrict,
 		notifyCh:         make(chan string, 100),
 	}
 	for _, o := range opts {
@@ -123,12 +130,36 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (Job, error) {
 	if req.ChainID == "" {
 		return Job{}, fmt.Errorf("chain_id required")
 	}
+	if req.OrderingMode == "" {
+		if e.orderingStrategy != nil {
+			req.OrderingMode = e.orderingStrategy(req)
+		}
+		if req.OrderingMode == "" {
+			req.OrderingMode = e.orderingMode
+		}
+	}
+	if req.OrderingMode == "" {
+		req.OrderingMode = OrderingModeStrict
+	}
 	if req.TraceID == "" {
 		req.TraceID = ExtractTraceID(ctx)
 	}
 	return e.repo.Enqueue(ctx, req)
 }
 func (e *Engine) EnqueueBatch(ctx context.Context, reqs []EnqueueRequest) ([]Job, error) {
+	for i := range reqs {
+		if reqs[i].OrderingMode == "" {
+			if e.orderingStrategy != nil {
+				reqs[i].OrderingMode = e.orderingStrategy(reqs[i])
+			}
+			if reqs[i].OrderingMode == "" {
+				reqs[i].OrderingMode = e.orderingMode
+			}
+		}
+		if reqs[i].OrderingMode == "" {
+			reqs[i].OrderingMode = OrderingModeStrict
+		}
+	}
 	return e.repo.EnqueueBatch(ctx, reqs)
 }
 func (e *Engine) Get(ctx context.Context, id uuid.UUID) (Job, error) {
@@ -283,16 +314,26 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 		_ = e.repo.RequestCancel(e.ctx, job.ID)
 	}
 
-	if IsNonRetryable(execErr) || job.Attempt >= job.MaxAttempts {
-		_ = e.repo.Fail(e.ctx, job.ID, workerName, job.LeaseGeneration, execErr.Error(), true)
-		e.metrics.IncFailed(job.Type)
-		e.logger.Error(e.ctx, "job failed terminally", append(LogJobAttrs(job), "error", execErr.Error())...)
-		return
-	}
+	if IsNonRetryable(execErr) || job.Attempt >= job.MaxAttempts || !e.retryPol.ShouldRetry(job.Attempt) {
+		mode := job.OrderingMode
+		if mode == "" {
+			mode = e.orderingMode
+		}
+		if mode == "" {
+			mode = OrderingModeStrict
+		}
 
-	if !e.retryPol.ShouldRetry(job.Attempt) {
 		_ = e.repo.Fail(e.ctx, job.ID, workerName, job.LeaseGeneration, execErr.Error(), true)
 		e.metrics.IncFailed(job.Type)
+		e.logger.Error(e.ctx, "job failed terminally", append(LogJobAttrs(job), "error", execErr.Error(), "ordering_mode", mode)...)
+
+		if mode == OrderingModeSkipOnFailure || mode == OrderingModeDeadLetterAndContinue {
+			_ = e.repo.PromoteNext(e.ctx, job.ChainID, job.Sequence)
+			select {
+			case e.notifyCh <- job.ChainID:
+			default:
+			}
+		}
 		return
 	}
 	next := time.Now().UTC().Add(e.retryPol.Backoff(job.Attempt))

@@ -216,10 +216,15 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req order
 			return orderedjob.Job{}, orderedjob.ErrDuplicateChainSeq
 		}
 	}
+	orderingMode := req.OrderingMode
+	if orderingMode == "" {
+		orderingMode = orderedjob.OrderingModeStrict
+	}
 	status := lifecycle.StatePending
 	if seq > 1 {
 		var predStatus *string
-		err := tx.QueryRow(ctx, "SELECT status FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2", req.ChainID, seq-1).Scan(&predStatus)
+		var predOrderingMode *string
+		err := tx.QueryRow(ctx, "SELECT status, COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2", req.ChainID, seq-1).Scan(&predStatus, &predOrderingMode)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return orderedjob.Job{}, err
 		}
@@ -227,12 +232,17 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req order
 			for _, o := range previousInBatch {
 				if o.ChainID == req.ChainID && o.Sequence == seq-1 {
 					s := o.Status
+					om := o.OrderingMode
 					predStatus = &s
+					predOrderingMode = &om
 					break
 				}
 			}
 		}
-		if predStatus == nil || *predStatus != lifecycle.StateCompleted {
+		isPredFinished := predStatus != nil && (*predStatus == lifecycle.StateCompleted ||
+			((*predStatus == lifecycle.StateFailed || *predStatus == lifecycle.StateDeadLettered) &&
+				predOrderingMode != nil && (*predOrderingMode == orderedjob.OrderingModeSkipOnFailure || *predOrderingMode == orderedjob.OrderingModeDeadLetterAndContinue)))
+		if !isPredFinished {
 			status = lifecycle.StateBlocked
 		}
 	}
@@ -254,11 +264,11 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req order
 	id := uuid.New()
 	var created orderedjob.Job
 	err = tx.QueryRow(ctx, `
-		INSERT INTO ordered_jobs (id, chain_id, sequence, job_type, payload, status, max_attempts, available_at, deadline_at, idempotency_key, tenant_id, trace_id, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
-		RETURNING id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(trace_id, '')
-	`, id, req.ChainID, seq, req.Type, payloadBytes, status, maxAttempts, availableAt, req.DeadlineAt, nullable(req.IdempotencyKey), nullable(req.TenantID), nullable(req.TraceID)).Scan(
-		&created.ID, &created.ChainID, &created.Sequence, &created.Type, &created.Payload, &created.Status, &created.Attempt, &created.MaxAttempts, &created.AvailableAt, &created.DeadlineAt, &created.WorkerID, &created.LeaseUntil, &created.LeaseGeneration, &created.CreatedAt, &created.UpdatedAt, &created.IdempotencyKey, &created.TenantID, &created.TraceID,
+		INSERT INTO ordered_jobs (id, chain_id, sequence, job_type, payload, status, max_attempts, available_at, deadline_at, idempotency_key, tenant_id, trace_id, ordering_mode, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())
+		RETURNING id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict')
+	`, id, req.ChainID, seq, req.Type, payloadBytes, status, maxAttempts, availableAt, req.DeadlineAt, nullable(req.IdempotencyKey), nullable(req.TenantID), nullable(req.TraceID), orderingMode).Scan(
+		&created.ID, &created.ChainID, &created.Sequence, &created.Type, &created.Payload, &created.Status, &created.Attempt, &created.MaxAttempts, &created.AvailableAt, &created.DeadlineAt, &created.WorkerID, &created.LeaseUntil, &created.LeaseGeneration, &created.CreatedAt, &created.UpdatedAt, &created.IdempotencyKey, &created.TenantID, &created.TraceID, &created.OrderingMode,
 	)
 	if err != nil {
 		return orderedjob.Job{}, err
@@ -268,8 +278,8 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req order
 
 func (r *Repository) Get(ctx context.Context, id uuid.UUID) (orderedjob.Job, error) {
 	var j orderedjob.Job
-	err := r.pool.QueryRow(ctx, `SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '') FROM ordered_jobs WHERE id=$1`, id).Scan(
-		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts, &j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt, &j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID,
+	err := r.pool.QueryRow(ctx, `SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE id=$1`, id).Scan(
+		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts, &j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt, &j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID, &j.OrderingMode,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -282,8 +292,8 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (orderedjob.Job, err
 
 func (r *Repository) GetByChainSeq(ctx context.Context, chainID string, seq int64) (orderedjob.Job, error) {
 	var j orderedjob.Job
-	err := r.pool.QueryRow(ctx, `SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '') FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2`, chainID, seq).Scan(
-		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts, &j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt, &j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID,
+	err := r.pool.QueryRow(ctx, `SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2`, chainID, seq).Scan(
+		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts, &j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt, &j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID, &j.OrderingMode,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -309,7 +319,10 @@ WITH candidate AS (
 	  AND j.available_at <= NOW()
 	  AND (j.sequence = 1 OR EXISTS (
 		SELECT 1 FROM ordered_jobs p
-		WHERE p.chain_id = j.chain_id AND p.sequence = j.sequence - 1 AND p.status = 'COMPLETED'
+		WHERE p.chain_id = j.chain_id AND p.sequence = j.sequence - 1 AND (
+			p.status = 'COMPLETED'
+			OR (p.status IN ('FAILED', 'DEAD_LETTERED') AND p.ordering_mode IN ('skip-on-failure', 'dead-letter-and-continue'))
+		)
 	  ))
 	ORDER BY j.available_at ASC, j.created_at ASC
 	FOR UPDATE SKIP LOCKED
@@ -325,10 +338,10 @@ SET status = 'PROCESSING',
     updated_at = NOW()
 FROM candidate c
 WHERE o.id = c.id
-RETURNING o.id, o.chain_id, o.sequence, o.job_type, o.payload, o.status, o.attempt, o.max_attempts, o.available_at, o.deadline_at, COALESCE(o.worker_id, ''), o.lease_until, o.lease_generation, o.created_at, o.updated_at, o.started_at, o.completed_at, o.failed_at, COALESCE(o.idempotency_key, ''), COALESCE(o.tenant_id, ''), COALESCE(o.last_error, ''), COALESCE(o.trace_id, '')
+RETURNING o.id, o.chain_id, o.sequence, o.job_type, o.payload, o.status, o.attempt, o.max_attempts, o.available_at, o.deadline_at, COALESCE(o.worker_id, ''), o.lease_until, o.lease_generation, o.created_at, o.updated_at, o.started_at, o.completed_at, o.failed_at, COALESCE(o.idempotency_key, ''), COALESCE(o.tenant_id, ''), COALESCE(o.last_error, ''), COALESCE(o.trace_id, ''), COALESCE(o.ordering_mode, 'strict')
 `, workerID, leaseSec)
 		err := row.Scan(
-			&job.ID, &job.ChainID, &job.Sequence, &job.Type, &job.Payload, &job.Status, &job.Attempt, &job.MaxAttempts, &job.AvailableAt, &job.DeadlineAt, &job.WorkerID, &job.LeaseUntil, &job.LeaseGeneration, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.CompletedAt, &job.FailedAt, &job.IdempotencyKey, &job.TenantID, &job.LastError, &job.TraceID,
+			&job.ID, &job.ChainID, &job.Sequence, &job.Type, &job.Payload, &job.Status, &job.Attempt, &job.MaxAttempts, &job.AvailableAt, &job.DeadlineAt, &job.WorkerID, &job.LeaseUntil, &job.LeaseGeneration, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.CompletedAt, &job.FailedAt, &job.IdempotencyKey, &job.TenantID, &job.LastError, &job.TraceID, &job.OrderingMode,
 		)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -375,6 +388,13 @@ func (r *Repository) Complete(ctx context.Context, id uuid.UUID, workerID string
 func (r *Repository) Fail(ctx context.Context, id uuid.UUID, workerID string, leaseGen int, errMsg string, terminal bool) error {
 	return withTx(ctx, r.pool, func(tx pgx.Tx) error {
 		status := lifecycle.StateFailed
+		if terminal {
+			var mode string
+			_ = tx.QueryRow(ctx, "SELECT COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE id=$1", id).Scan(&mode)
+			if mode == orderedjob.OrderingModeDeadLetterAndContinue {
+				status = lifecycle.StateDeadLettered
+			}
+		}
 		tag, err := tx.Exec(ctx, `
 			UPDATE ordered_jobs
 			SET status=$1, failed_at=NOW(), updated_at=NOW(), last_error=$2, lease_until=NULL
@@ -637,11 +657,11 @@ func findExistingByIdempotencyKey(ctx context.Context, tx pgx.Tx, key string) (o
 	}
 	var existing orderedjob.Job
 	err := tx.QueryRow(ctx, `
-		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(trace_id, '')
+		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict')
 		FROM ordered_jobs
 		WHERE idempotency_key = $1
 	`, key).Scan(
-		&existing.ID, &existing.ChainID, &existing.Sequence, &existing.Type, &existing.Payload, &existing.Status, &existing.Attempt, &existing.MaxAttempts, &existing.AvailableAt, &existing.DeadlineAt, &existing.WorkerID, &existing.LeaseUntil, &existing.LeaseGeneration, &existing.CreatedAt, &existing.UpdatedAt, &existing.IdempotencyKey, &existing.TenantID, &existing.TraceID,
+		&existing.ID, &existing.ChainID, &existing.Sequence, &existing.Type, &existing.Payload, &existing.Status, &existing.Attempt, &existing.MaxAttempts, &existing.AvailableAt, &existing.DeadlineAt, &existing.WorkerID, &existing.LeaseUntil, &existing.LeaseGeneration, &existing.CreatedAt, &existing.UpdatedAt, &existing.IdempotencyKey, &existing.TenantID, &existing.TraceID, &existing.OrderingMode,
 	)
 	if err == nil {
 		return existing, true, nil
@@ -657,7 +677,7 @@ func scanJob(s pgx.Row) (orderedjob.Job, error) {
 		&j.ID, &j.ChainID, &j.Sequence, &j.Type, &j.Payload, &j.Status, &j.Attempt, &j.MaxAttempts,
 		&j.AvailableAt, &j.DeadlineAt, &j.WorkerID, &j.LeaseUntil, &j.LeaseGeneration,
 		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt, &j.FailedAt,
-		&j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID,
+		&j.IdempotencyKey, &j.TenantID, &j.LastError, &j.TraceID, &j.OrderingMode,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -794,7 +814,7 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 
 	// #nosec G201
 	dataQuery := fmt.Sprintf(`
-		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
+		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict')
 		FROM ordered_jobs
 		WHERE %s
 		ORDER BY %s %s

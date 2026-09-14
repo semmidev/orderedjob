@@ -128,12 +128,20 @@ func (r *repo) enqueueSingleInMemory(req orderedjob.EnqueueRequest) (orderedjob.
 		maxAttempts = 5
 	}
 
+	orderingMode := req.OrderingMode
+	if orderingMode == "" {
+		orderingMode = orderedjob.OrderingModeStrict
+	}
+
 	status := lifecycle.StatePending
 	if seq > 1 {
 		if m, ok := r.chain[chain]; ok {
 			if predID, ok := m[seq-1]; ok {
 				pred := r.jobs[predID]
-				if pred.Status != lifecycle.StateCompleted {
+				isPredFinished := pred.Status == lifecycle.StateCompleted ||
+					((pred.Status == lifecycle.StateFailed || pred.Status == lifecycle.StateDeadLettered) &&
+						(pred.OrderingMode == orderedjob.OrderingModeSkipOnFailure || pred.OrderingMode == orderedjob.OrderingModeDeadLetterAndContinue))
+				if !isPredFinished {
 					status = lifecycle.StateBlocked
 				}
 			} else {
@@ -153,6 +161,7 @@ func (r *repo) enqueueSingleInMemory(req orderedjob.EnqueueRequest) (orderedjob.
 		IdempotencyKey: req.IdempotencyKey,
 		TenantID:       req.TenantID,
 		TraceID:        req.TraceID,
+		OrderingMode:   orderingMode,
 		Status:         status,
 		Attempt:        0,
 		MaxAttempts:    maxAttempts,
@@ -207,8 +216,13 @@ func (r *repo) Claim(ctx context.Context, workerID string, lease time.Duration) 
 			} else {
 				if m, ok := r.chain[j.ChainID]; ok {
 					if predID, ok := m[j.Sequence-1]; ok {
-						if pred, ok := r.jobs[predID]; ok && pred.Status == lifecycle.StateCompleted {
-							cands = append(cands, j)
+						if pred, ok := r.jobs[predID]; ok {
+							isPredFinished := pred.Status == lifecycle.StateCompleted ||
+								((pred.Status == lifecycle.StateFailed || pred.Status == lifecycle.StateDeadLettered) &&
+									(pred.OrderingMode == orderedjob.OrderingModeSkipOnFailure || pred.OrderingMode == orderedjob.OrderingModeDeadLetterAndContinue))
+							if isPredFinished {
+								cands = append(cands, j)
+							}
 						}
 					}
 				}
@@ -307,12 +321,15 @@ func (r *repo) Fail(ctx context.Context, id uuid.UUID, workerID string, leaseGen
 	j.LastError = errMsg
 	j.UpdatedAt = now
 	if terminal {
-		j.Status = lifecycle.StateFailed
+		if j.OrderingMode == orderedjob.OrderingModeDeadLetterAndContinue {
+			j.Status = lifecycle.StateDeadLettered
+		} else {
+			j.Status = lifecycle.StateFailed
+		}
 		t := now
 		j.FailedAt = &t
 		j.LeaseUntil = nil
 	} else {
-		// will be retried via Retry, but if called as fail non-terminal we set retrying? keep as failed for simplicity
 		j.Status = lifecycle.StateFailed
 		j.FailedAt = &now
 		j.LeaseUntil = nil
