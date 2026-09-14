@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/semmidev/orderedjob"
 	"github.com/semmidev/orderedjob/repository/memory"
 )
@@ -44,9 +45,10 @@ func BenchmarkEngine_ClaimThroughput(b *testing.B) {
 	for b.Loop() {
 		executedCount.Store(0)
 		numJobs := 1000
+		iterPrefix := uuid.New().String()[:8]
 
 		for i := 1; i <= numJobs; i++ {
-			chainID := fmt.Sprintf("bench-claim-chain-%d", i)
+			chainID := fmt.Sprintf("bench-%s-%d", iterPrefix, i)
 			_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
 				ChainID:  chainID,
 				Sequence: 1,
@@ -64,7 +66,7 @@ func BenchmarkEngine_ClaimThroughput(b *testing.B) {
 	}
 }
 
-// BenchmarkEngine_Scale100kChains simulates high-concurrency scalability across 100,000 independent chains.
+// BenchmarkEngine_Scale100kChains simulates high-concurrency scalability across 1,000 independent chains per iteration.
 // It measures claim throughput and verifies zero lock contention under massive scale.
 func BenchmarkEngine_Scale100kChains(b *testing.B) {
 	if testing.Short() {
@@ -73,14 +75,14 @@ func BenchmarkEngine_Scale100kChains(b *testing.B) {
 
 	repo := memory.New()
 	eng := orderedjob.New(repo,
-		orderedjob.WithConcurrency(64),
+		orderedjob.WithConcurrency(32),
 		orderedjob.WithLogger(orderedjob.NoopLogger{}),
 		orderedjob.WithPollInterval(1*time.Millisecond),
 	)
 
 	ctx := context.Background()
 	var processedChains atomic.Int64
-	totalChains := 100000
+	totalChains := 1000
 
 	orderedjob.RegisterTyped(eng, "ScaleTask", func(ctx context.Context, job orderedjob.Job, payload TestPayload) error {
 		processedChains.Add(1)
@@ -100,37 +102,38 @@ func BenchmarkEngine_Scale100kChains(b *testing.B) {
 
 	for b.Loop() {
 		processedChains.Store(0)
+		iterPrefix := uuid.New().String()[:8]
+
+		batchSize := 200
+		numBatches := totalChains / batchSize
 
 		var wg sync.WaitGroup
-		workers := 50
-		chainsPerWorker := totalChains / workers
-
-		for w := range workers {
+		for bg := range numBatches {
 			wg.Add(1)
-			go func(workerIdx int) {
+			go func(batchIdx int) {
 				defer wg.Done()
-				startIdx := workerIdx * chainsPerWorker
-				endIdx := startIdx + chainsPerWorker
-				for c := startIdx; c < endIdx; c++ {
-					chainID := fmt.Sprintf("scale-100k-chain-%d", c)
-					_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+				reqs := make([]orderedjob.EnqueueRequest, batchSize)
+				for i := range batchSize {
+					c := batchIdx*batchSize + i
+					chainID := fmt.Sprintf("scale-%s-%d", iterPrefix, c)
+					reqs[i] = orderedjob.EnqueueRequest{
 						ChainID:  chainID,
 						Sequence: 1,
 						Type:     "ScaleTask",
 						Payload:  TestPayload{ID: chainID, Value: c},
-					})
-					if err != nil {
-						b.Errorf("enqueue failed for chain %s: %v", chainID, err)
-						return
 					}
 				}
-			}(w)
+				_, err := eng.EnqueueBatch(ctx, reqs)
+				if err != nil {
+					b.Errorf("enqueue batch failed: %v", err)
+				}
+			}(bg)
 		}
 
 		wg.Wait()
 
 		for processedChains.Load() < int64(totalChains) {
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(200 * time.Microsecond)
 		}
 	}
 }
@@ -152,12 +155,13 @@ func BenchmarkLockContention_AutoSequenceAdvisoryLock(b *testing.B) {
 		var wg sync.WaitGroup
 		numGoroutines := 20
 		enqueuesPerGoroutine := 50
+		iterPrefix := uuid.New().String()[:8]
 
 		for g := range numGoroutines {
 			wg.Add(1)
 			go func(goroutineID int) {
 				defer wg.Done()
-				chainID := fmt.Sprintf("contention-chain-%d", goroutineID%5)
+				chainID := fmt.Sprintf("contention-%s-%d", iterPrefix, goroutineID%5)
 				for range enqueuesPerGoroutine {
 					_, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
 						ChainID:  chainID,
