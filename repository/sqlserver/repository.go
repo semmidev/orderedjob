@@ -607,7 +607,7 @@ func findExistingByIdempotencyKey(ctx context.Context, tx *sql.Tx, key string) (
 	job, err := scanJob(row)
 	if err == nil {
 		return job, true, nil
-	} else if errors.Is(err, sql.ErrNoRows) {
+	} else if errors.Is(err, sql.ErrNoRows) || errors.Is(err, orderedjob.ErrNotFound) {
 		return orderedjob.Job{}, false, nil
 	}
 	return orderedjob.Job{}, false, err
