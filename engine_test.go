@@ -642,13 +642,16 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 
 	t.Run("Custom PanicHandler interceptor", func(t *testing.T) {
 		repo := memory.New()
+		var mu sync.Mutex
 		var interceptedPanic any
 
 		eng := orderedjob.New(repo,
 			orderedjob.WithConcurrency(1),
 			orderedjob.WithPollInterval(10*time.Millisecond),
 			orderedjob.WithPanicHandler(func(ctx context.Context, job orderedjob.Job, panicVal any, stack []byte) error {
+				mu.Lock()
 				interceptedPanic = panicVal
+				mu.Unlock()
 				return orderedjob.NonRetryable(fmt.Errorf("custom panic handling: %v", panicVal))
 			}),
 			orderedjob.WithLogger(orderedjob.NoopLogger{}),
@@ -667,7 +670,10 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		assert.Equal(t, "custom panic payload", interceptedPanic)
+		mu.Lock()
+		val := interceptedPanic
+		mu.Unlock()
+		assert.Equal(t, "custom panic payload", val)
 
 		jFetched, _ := eng.Get(ctx, j.ID)
 		assert.Equal(t, "FAILED", jFetched.Status)
@@ -676,7 +682,7 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 
 	t.Run("WithRetryOnPanic enables retry behavior", func(t *testing.T) {
 		repo := memory.New()
-		var attempts int
+		var attempts atomic.Int32
 
 		eng := orderedjob.New(repo,
 			orderedjob.WithConcurrency(1),
@@ -691,8 +697,7 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 		)
 
 		eng.RegisterFunc("FlakyPanicJob", func(ctx context.Context, job orderedjob.Job) error {
-			attempts++
-			if attempts < 2 {
+			if attempts.Add(1) < 2 {
 				panic("transient panic")
 			}
 			return nil
@@ -709,7 +714,7 @@ func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
 
 		jFetched, _ := eng.Get(ctx, j.ID)
 		assert.Equal(t, "COMPLETED", jFetched.Status)
-		assert.Equal(t, 2, attempts)
+		assert.Equal(t, int32(2), attempts.Load())
 	})
 }
 

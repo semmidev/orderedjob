@@ -66,50 +66,89 @@ func (r *repo) EnqueueBatch(ctx context.Context, reqs []orderedjob.EnqueueReques
 	return out, nil
 }
 
+func (r *repo) findJobByIdempotencyKey(key string) (orderedjob.Job, bool) {
+	for _, existing := range r.jobs {
+		if existing.IdempotencyKey == key {
+			return existing, true
+		}
+	}
+	return orderedjob.Job{}, false
+}
+
+func (r *repo) getMaxSequence(chain string) int64 {
+	max := int64(0)
+	if m, ok := r.chain[chain]; ok {
+		for s := range m {
+			if s > max {
+				max = s
+			}
+		}
+	}
+	return max
+}
+
+func (r *repo) validateAndResolveSequence(chain string, seq int64) (int64, error) {
+	if seq == 0 {
+		return r.getMaxSequence(chain) + 1, nil
+	}
+
+	m, hasChain := r.chain[chain]
+	if seq > 1 {
+		if hasChain {
+			max := r.getMaxSequence(chain)
+			if _, ok := m[seq-1]; !ok && seq > max+1 {
+				return 0, fmt.Errorf("%w: missing predecessor %d for chain %s", orderedjob.ErrSequenceGap, seq-1, chain)
+			}
+		} else {
+			return 0, fmt.Errorf("%w: first job must be seq 1", orderedjob.ErrSequenceGap)
+		}
+	}
+
+	if hasChain {
+		if _, exists := m[seq]; exists {
+			return 0, orderedjob.ErrDuplicateChainSeq
+		}
+	}
+
+	return seq, nil
+}
+
+func (r *repo) determineInitialStatus(chain string, seq int64) string {
+	if seq <= 1 {
+		return lifecycle.StatePending
+	}
+	m, ok := r.chain[chain]
+	if !ok {
+		return lifecycle.StateBlocked
+	}
+	predID, ok := m[seq-1]
+	if !ok {
+		return lifecycle.StateBlocked
+	}
+	pred := r.jobs[predID]
+	isPredFinished := pred.Status == lifecycle.StateCompleted ||
+		((pred.Status == lifecycle.StateFailed || pred.Status == lifecycle.StateDeadLettered) &&
+			(pred.OrderingMode == orderedjob.OrderingModeSkipOnFailure || pred.OrderingMode == orderedjob.OrderingModeDeadLetterAndContinue))
+	if !isPredFinished {
+		return lifecycle.StateBlocked
+	}
+	return lifecycle.StatePending
+}
+
 func (r *repo) enqueueSingleInMemory(req orderedjob.EnqueueRequest) (orderedjob.Job, error) {
 	chain := req.ChainID
 	if chain == "" {
 		return orderedjob.Job{}, fmt.Errorf("chain_id required")
 	}
 	if req.IdempotencyKey != "" {
-		for _, existing := range r.jobs {
-			if existing.IdempotencyKey == req.IdempotencyKey {
-				return existing, nil
-			}
+		if existing, ok := r.findJobByIdempotencyKey(req.IdempotencyKey); ok {
+			return existing, nil
 		}
 	}
-	seq := req.Sequence
-	if seq == 0 {
-		max := int64(0)
-		if m, ok := r.chain[chain]; ok {
-			for s := range m {
-				if s > max {
-					max = s
-				}
-			}
-		}
-		seq = max + 1
-	} else {
-		if seq > 1 {
-			if m, ok := r.chain[chain]; ok {
-				max := int64(0)
-				for s := range m {
-					if s > max {
-						max = s
-					}
-				}
-				if _, ok := m[seq-1]; !ok && seq > max+1 {
-					return orderedjob.Job{}, fmt.Errorf("%w: missing predecessor %d for chain %s", orderedjob.ErrSequenceGap, seq-1, chain)
-				}
-			} else if seq != 1 {
-				return orderedjob.Job{}, fmt.Errorf("%w: first job must be seq 1", orderedjob.ErrSequenceGap)
-			}
-		}
-		if m, ok := r.chain[chain]; ok {
-			if _, exists := m[seq]; exists {
-				return orderedjob.Job{}, orderedjob.ErrDuplicateChainSeq
-			}
-		}
+
+	seq, err := r.validateAndResolveSequence(chain, req.Sequence)
+	if err != nil {
+		return orderedjob.Job{}, err
 	}
 
 	payloadBytes, _ := json.Marshal(req.Payload)
@@ -133,24 +172,7 @@ func (r *repo) enqueueSingleInMemory(req orderedjob.EnqueueRequest) (orderedjob.
 		orderingMode = orderedjob.OrderingModeStrict
 	}
 
-	status := lifecycle.StatePending
-	if seq > 1 {
-		if m, ok := r.chain[chain]; ok {
-			if predID, ok := m[seq-1]; ok {
-				pred := r.jobs[predID]
-				isPredFinished := pred.Status == lifecycle.StateCompleted ||
-					((pred.Status == lifecycle.StateFailed || pred.Status == lifecycle.StateDeadLettered) &&
-						(pred.OrderingMode == orderedjob.OrderingModeSkipOnFailure || pred.OrderingMode == orderedjob.OrderingModeDeadLetterAndContinue))
-				if !isPredFinished {
-					status = lifecycle.StateBlocked
-				}
-			} else {
-				status = lifecycle.StateBlocked
-			}
-		} else {
-			status = lifecycle.StateBlocked
-		}
-	}
+	status := r.determineInitialStatus(chain, seq)
 
 	job := orderedjob.Job{
 		ID:             id,

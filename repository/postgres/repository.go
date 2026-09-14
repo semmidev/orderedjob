@@ -183,6 +183,59 @@ func (r *Repository) EnqueueBatch(ctx context.Context, reqs []orderedjob.Enqueue
 	return out, nil
 }
 
+func resolveSequenceInTx(ctx context.Context, tx pgx.Tx, chainID string, requestedSeq int64) (int64, error) {
+	if requestedSeq == 0 {
+		var max *int64
+		if err := tx.QueryRow(ctx, "SELECT MAX(sequence) FROM ordered_jobs WHERE chain_id=$1", chainID).Scan(&max); err != nil {
+			return 0, err
+		}
+		if max == nil {
+			return 1, nil
+		}
+		return *max + 1, nil
+	}
+
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2)", chainID, requestedSeq).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if exists {
+		return 0, orderedjob.ErrDuplicateChainSeq
+	}
+	return requestedSeq, nil
+}
+
+func determineStatusInTx(ctx context.Context, tx pgx.Tx, chainID string, seq int64, previousInBatch []orderedjob.Job) (string, error) {
+	if seq <= 1 {
+		return lifecycle.StatePending, nil
+	}
+
+	var predStatus *string
+	var predOrderingMode *string
+	err := tx.QueryRow(ctx, "SELECT status, COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2", chainID, seq-1).Scan(&predStatus, &predOrderingMode)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if predStatus == nil {
+		for _, o := range previousInBatch {
+			if o.ChainID == chainID && o.Sequence == seq-1 {
+				s := o.Status
+				om := o.OrderingMode
+				predStatus = &s
+				predOrderingMode = &om
+				break
+			}
+		}
+	}
+	isPredFinished := predStatus != nil && (*predStatus == lifecycle.StateCompleted ||
+		((*predStatus == lifecycle.StateFailed || *predStatus == lifecycle.StateDeadLettered) &&
+			predOrderingMode != nil && (*predOrderingMode == orderedjob.OrderingModeSkipOnFailure || *predOrderingMode == orderedjob.OrderingModeDeadLetterAndContinue)))
+	if !isPredFinished {
+		return lifecycle.StateBlocked, nil
+	}
+	return lifecycle.StatePending, nil
+}
+
 func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req orderedjob.EnqueueRequest, previousInBatch []orderedjob.Job) (orderedjob.Job, error) {
 	if existing, found, err := findExistingByIdempotencyKey(ctx, tx, req.IdempotencyKey); err != nil {
 		return orderedjob.Job{}, err
@@ -196,56 +249,22 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx pgx.Tx, req order
 			}
 		}
 	}
-	seq := req.Sequence
-	if seq == 0 {
-		var max *int64
-		if err := tx.QueryRow(ctx, "SELECT MAX(sequence) FROM ordered_jobs WHERE chain_id=$1", req.ChainID).Scan(&max); err != nil {
-			return orderedjob.Job{}, err
-		}
-		if max == nil {
-			seq = 1
-		} else {
-			seq = *max + 1
-		}
-	} else {
-		var exists bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2)", req.ChainID, seq).Scan(&exists); err != nil {
-			return orderedjob.Job{}, err
-		}
-		if exists {
-			return orderedjob.Job{}, orderedjob.ErrDuplicateChainSeq
-		}
+
+	seq, err := resolveSequenceInTx(ctx, tx, req.ChainID, req.Sequence)
+	if err != nil {
+		return orderedjob.Job{}, err
 	}
+
 	orderingMode := req.OrderingMode
 	if orderingMode == "" {
 		orderingMode = orderedjob.OrderingModeStrict
 	}
-	status := lifecycle.StatePending
-	if seq > 1 {
-		var predStatus *string
-		var predOrderingMode *string
-		err := tx.QueryRow(ctx, "SELECT status, COALESCE(ordering_mode, 'strict') FROM ordered_jobs WHERE chain_id=$1 AND sequence=$2", req.ChainID, seq-1).Scan(&predStatus, &predOrderingMode)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return orderedjob.Job{}, err
-		}
-		if predStatus == nil {
-			for _, o := range previousInBatch {
-				if o.ChainID == req.ChainID && o.Sequence == seq-1 {
-					s := o.Status
-					om := o.OrderingMode
-					predStatus = &s
-					predOrderingMode = &om
-					break
-				}
-			}
-		}
-		isPredFinished := predStatus != nil && (*predStatus == lifecycle.StateCompleted ||
-			((*predStatus == lifecycle.StateFailed || *predStatus == lifecycle.StateDeadLettered) &&
-				predOrderingMode != nil && (*predOrderingMode == orderedjob.OrderingModeSkipOnFailure || *predOrderingMode == orderedjob.OrderingModeDeadLetterAndContinue)))
-		if !isPredFinished {
-			status = lifecycle.StateBlocked
-		}
+
+	status, err := determineStatusInTx(ctx, tx, req.ChainID, seq, previousInBatch)
+	if err != nil {
+		return orderedjob.Job{}, err
 	}
+
 	payloadBytes, err := json.Marshal(req.Payload)
 	if err != nil {
 		return orderedjob.Job{}, err
