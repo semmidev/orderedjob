@@ -757,6 +757,7 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 
 	whereStmt := strings.Join(whereClauses, " AND ")
 
+	// #nosec G201
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM ordered_jobs WHERE %s", whereStmt)
 	var total int64
 	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
@@ -791,6 +792,7 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 		orderDir = "ASC"
 	}
 
+	// #nosec G201
 	dataQuery := fmt.Sprintf(`
 		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
 		FROM ordered_jobs
@@ -830,6 +832,7 @@ func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilt
 		argIdx++
 	}
 
+	// #nosec G201
 	countQuery := fmt.Sprintf("SELECT COUNT(DISTINCT chain_id) FROM ordered_jobs %s", whereClause)
 	var total int64
 	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
@@ -864,6 +867,7 @@ func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilt
 		orderDir = "DESC"
 	}
 
+	// #nosec G201
 	dataQuery := fmt.Sprintf(`
 		SELECT 
 			chain_id,

@@ -90,7 +90,7 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 			htmlStr = strings.ReplaceAll(htmlStr, "{{ROOT_PATH}}", options.RootPath)
 			htmlStr = strings.ReplaceAll(htmlStr, "{{TITLE}}", options.Title)
 			htmlStr = strings.ReplaceAll(htmlStr, "{{READ_ONLY}}", strconv.FormatBool(options.ReadOnly))
-			w.Write([]byte(htmlStr))
+			_, _ = w.Write([]byte(htmlStr))
 			return
 		}
 		fileServer.ServeHTTP(w, r)
