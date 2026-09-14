@@ -14,6 +14,8 @@ import (
 	"github.com/semmidev/orderedjob/retry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type TestPayload struct {
@@ -860,4 +862,61 @@ func TestEngine_TypedHandlerValidation(t *testing.T) {
 		assert.False(t, handled)
 		assert.Contains(t, jFetched.LastError, "amount must be positive")
 	})
+}
+
+func TestEngine_OpenTelemetryTracing(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	tracer := tp.Tracer("test-tracer")
+
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(10*time.Millisecond),
+		orderedjob.WithTracerProvider(tp),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	var handlerExecuted atomic.Bool
+	var handlerTraceID atomic.Value
+	eng.RegisterFunc("OTelJob", func(ctx context.Context, job orderedjob.Job) error {
+		handlerExecuted.Store(true)
+		handlerTraceID.Store(orderedjob.ExtractTraceID(ctx))
+		return nil
+	})
+
+	ctx := context.Background()
+	parentCtx, parentSpan := tracer.Start(ctx, "producer-span")
+
+	job, err := eng.Enqueue(parentCtx, orderedjob.EnqueueRequest{
+		ChainID:  "otel-chain",
+		Sequence: 1,
+		Type:     "OTelJob",
+	})
+	require.NoError(t, err)
+	parentSpan.End()
+
+	require.NotEmpty(t, job.TraceID)
+	require.Equal(t, parentSpan.SpanContext().TraceID().String(), job.TraceID)
+
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	time.Sleep(150 * time.Millisecond)
+
+	assert.True(t, handlerExecuted.Load())
+	gotTraceID, _ := handlerTraceID.Load().(string)
+	assert.Equal(t, job.TraceID, gotTraceID)
+
+	spans := exporter.GetSpans()
+	require.NotEmpty(t, spans)
+
+	var foundConsumerSpan bool
+	for _, s := range spans {
+		if s.Name == "orderedjob.execute" {
+			foundConsumerSpan = true
+			assert.Equal(t, parentSpan.SpanContext().TraceID().String(), s.SpanContext.TraceID().String())
+		}
+	}
+	assert.True(t, foundConsumerSpan, "consumer span orderedjob.execute should be exported")
 }

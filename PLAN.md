@@ -11,7 +11,7 @@ Roadmap ini dirancang dari sudut pandang *Principal Software Architect / Senior 
 - [x] **V1 Core Architecture** (Strict Order FIFO, Advisory Locks, Fencing Tokens, PG/MSSQL Drivers, Web UI Dashboard)
 - [ ] **Phase 1**: Core Queue Architecture & Execution Mechanics
 - [ ] **Phase 2**: Resilience, Fault Tolerance & DLQ Engineering
-- [ ] **Phase 3**: Enterprise Observability & Telemetry (OpenTelemetry)
+- [x] **Phase 3**: Enterprise Observability & Telemetry (OpenTelemetry)
 - [ ] **Phase 4**: Developer Experience, Testing Utilities & CLI Tooling
 - [ ] **Phase 5**: Advanced Web UI Features & Security
 - [ ] **Phase 6**: High-Performance Storage, Compression & Housekeeping
@@ -71,8 +71,8 @@ Aspek ini memastikan pustaka tahan terhadap kegagalan infrastruktur, *unhandled 
 Observabilitas standar industri untuk memantau latensi, jejak terdistribusi, serta audit log lengkap.
 
 ### 3.1 Native OpenTelemetry (OTel) Integration
-- [ ] **OTel Tracing Support**: Integrasi native dengan `go.opentelemetry.io/otel`. Otomatis meneruskan *TraceContext* (W3C traceparent) melalui `EnqueueRequest` hingga ke handler execution context.
-- [ ] **OTel / Prometheus Metrics Exporter**: Menyediakan *standard metric counters & histograms*:
+- [x] **OTel Tracing Support**: Integrasi native dengan `go.opentelemetry.io/otel`. Otomatis meneruskan *TraceContext* (W3C traceparent) melalui `EnqueueRequest` hingga ke handler execution context.
+- [x] **OTel / Prometheus Metrics Exporter**: Menyediakan *standard metric counters & histograms*:
   - Queue latency distribution (p50, p95, p99)
   - Job execution duration per `job_type`
   - Active lease gauges & lease conflict counters

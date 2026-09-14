@@ -20,6 +20,8 @@ var WithWorkerID = orderedjob.WithWorkerID
 var WithRecoveryInterval = orderedjob.WithRecoveryInterval
 var WithNotify = orderedjob.WithNotify
 var WithOrderingMode = orderedjob.WithOrderingMode
+var WithTracer = orderedjob.WithTracer
+var WithTracerProvider = orderedjob.WithTracerProvider
 
 func RegisterTyped[T any](e *Engine, jobType string, fn func(ctx context.Context, job orderedjob.Job, payload T) error) {
 	orderedjob.RegisterTyped(e, jobType, fn)

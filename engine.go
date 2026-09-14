@@ -7,12 +7,17 @@ import (
 	"math/rand"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/destel/rill"
 	"github.com/google/uuid"
 	"github.com/semmidev/orderedjob/lease"
 	"github.com/semmidev/orderedjob/retry"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // PanicHandler handles panics caught during job execution.
@@ -26,6 +31,7 @@ type Engine struct {
 	retryPol retry.Policy
 	metrics  Metrics
 	logger   Logger
+	tracer   trace.Tracer
 
 	workerID         string
 	concurrency      int
@@ -37,6 +43,7 @@ type Engine struct {
 	orderingStrategy OrderingStrategyResolver
 	panicHandler     PanicHandler
 	retryOnPanic     bool
+	activeLeases     atomic.Int64
 
 	// lifecycle
 	ctx      context.Context
@@ -96,6 +103,16 @@ func WithPanicHandler(h PanicHandler) Option {
 func WithRetryOnPanic(retry bool) Option {
 	return func(e *Engine) { e.retryOnPanic = retry }
 }
+func WithTracer(t trace.Tracer) Option {
+	return func(e *Engine) { e.tracer = t }
+}
+func WithTracerProvider(tp trace.TracerProvider) Option {
+	return func(e *Engine) {
+		if tp != nil {
+			e.tracer = tp.Tracer("github.com/semmidev/orderedjob")
+		}
+	}
+}
 
 func New(repo Repository, opts ...Option) *Engine {
 	e := &Engine{
@@ -114,6 +131,9 @@ func New(repo Repository, opts ...Option) *Engine {
 	}
 	for _, o := range opts {
 		o(e)
+	}
+	if e.tracer == nil {
+		e.tracer = otel.GetTracerProvider().Tracer("github.com/semmidev/orderedjob")
 	}
 	if e.retryPol.MaxAttempts == 0 {
 		e.retryPol = retry.DefaultPolicy()
@@ -153,9 +173,7 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (Job, error) {
 	if req.OrderingMode == "" {
 		req.OrderingMode = OrderingModeStrict
 	}
-	if req.TraceID == "" {
-		req.TraceID = ExtractTraceID(ctx)
-	}
+	InjectOTelTraceContext(ctx, &req)
 	return e.repo.Enqueue(ctx, req)
 }
 func (e *Engine) EnqueueBatch(ctx context.Context, reqs []EnqueueRequest) ([]Job, error) {
@@ -171,6 +189,7 @@ func (e *Engine) EnqueueBatch(ctx context.Context, reqs []EnqueueRequest) ([]Job
 		if reqs[i].OrderingMode == "" {
 			reqs[i].OrderingMode = OrderingModeStrict
 		}
+		InjectOTelTraceContext(ctx, &reqs[i])
 	}
 	return e.repo.EnqueueBatch(ctx, reqs)
 }
@@ -300,6 +319,13 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 		return
 	}
 
+	active := e.activeLeases.Add(1)
+	e.metrics.SetActiveLeases(int(active))
+	defer func() {
+		rem := e.activeLeases.Add(-1)
+		e.metrics.SetActiveLeases(int(rem))
+	}()
+
 	e.metrics.IncClaimed()
 	queueDelay := time.Since(job.CreatedAt)
 	e.metrics.ObserveQueueDelay(job.Type, queueDelay)
@@ -319,6 +345,31 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 	}
 
 	execCtx := WithTraceID(hctx, job.TraceID)
+	if job.TraceID != "" {
+		if tID, err := trace.TraceIDFromHex(job.TraceID); err == nil && tID.IsValid() {
+			sc := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: tID,
+				Remote:  true,
+			})
+			execCtx = trace.ContextWithRemoteSpanContext(execCtx, sc)
+		}
+	}
+
+	var span trace.Span
+	if e.tracer != nil {
+		execCtx, span = e.tracer.Start(execCtx, "orderedjob.execute",
+			trace.WithAttributes(
+				attribute.String("job.id", job.ID.String()),
+				attribute.String("job.chain_id", job.ChainID),
+				attribute.String("job.type", job.Type),
+				attribute.Int64("job.sequence", job.Sequence),
+				attribute.Int("job.attempt", job.Attempt),
+				attribute.String("job.ordering_mode", job.OrderingMode),
+			),
+		)
+		defer span.End()
+	}
+
 	if job.DeadlineAt != nil {
 		var cancel context.CancelFunc
 		execCtx, cancel = context.WithDeadline(execCtx, *job.DeadlineAt)
@@ -352,6 +403,15 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 		dur := time.Since(start)
 		e.metrics.ObserveExecDuration(job.Type, dur)
 	}()
+
+	if span != nil {
+		if execErr != nil {
+			span.RecordError(execErr)
+			span.SetStatus(codes.Error, execErr.Error())
+		} else {
+			span.SetStatus(codes.Ok, "")
+		}
+	}
 
 	hcancel()
 
@@ -389,6 +449,9 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 
 		_ = e.repo.Fail(e.ctx, job.ID, workerName, job.LeaseGeneration, execErr.Error(), true)
 		e.metrics.IncFailed(job.Type)
+		if mode == OrderingModeStrict {
+			e.metrics.IncBlockedChain()
+		}
 		e.logger.Error(e.ctx, "job failed terminally", append(LogJobAttrs(job), "error", execErr.Error(), "ordering_mode", mode)...)
 
 		if mode == OrderingModeSkipOnFailure || mode == OrderingModeDeadLetterAndContinue {
