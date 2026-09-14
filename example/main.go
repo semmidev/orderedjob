@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/semmidev/orderedjob"
-	memRepo "github.com/semmidev/orderedjob/repository/memory"
 	pgRepo "github.com/semmidev/orderedjob/repository/postgres"
 	mssqlRepo "github.com/semmidev/orderedjob/repository/sqlserver"
 	"github.com/semmidev/orderedjob/retry"
