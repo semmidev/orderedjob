@@ -772,3 +772,120 @@ func (r *repo) ListChains(ctx context.Context, filter orderedjob.ChainFilter) ([
 
 	return summaries[filter.Offset:end], total, nil
 }
+
+func (r *repo) matchesDLQFilter(j orderedjob.Job, filter orderedjob.JobFilter) bool {
+	if j.Status != lifecycle.StateFailed && j.Status != lifecycle.StateDeadLettered {
+		return false
+	}
+	if filter.ChainID != "" && j.ChainID != filter.ChainID {
+		return false
+	}
+	if filter.JobType != "" && j.Type != filter.JobType {
+		return false
+	}
+	if filter.TenantID != "" && j.TenantID != filter.TenantID {
+		return false
+	}
+	if filter.TraceID != "" && j.TraceID != filter.TraceID {
+		return false
+	}
+	if filter.Search != "" {
+		search := strings.ToLower(filter.Search)
+		idStr := strings.ToLower(j.ID.String())
+		keyStr := strings.ToLower(j.IdempotencyKey)
+		traceStr := strings.ToLower(j.TraceID)
+		errStr := strings.ToLower(j.LastError)
+		if !strings.Contains(idStr, search) && !strings.Contains(keyStr, search) &&
+			!strings.Contains(traceStr, search) && !strings.Contains(errStr, search) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *repo) BulkReplayDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	var count int64
+
+	for id, j := range r.jobs {
+		if r.matchesDLQFilter(j, filter) {
+			j.Status = lifecycle.StatePending
+			j.Attempt = 0
+			j.LastError = ""
+			j.AvailableAt = now
+			j.UpdatedAt = now
+			j.LeaseUntil = nil
+			r.jobs[id] = j
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (r *repo) BulkSkipDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	var count int64
+
+	for id, j := range r.jobs {
+		if r.matchesDLQFilter(j, filter) {
+			j.Status = lifecycle.StateCompleted
+			j.CompletedAt = &now
+			j.UpdatedAt = now
+			j.LeaseUntil = nil
+			r.jobs[id] = j
+			count++
+
+			if m, ok := r.chain[j.ChainID]; ok {
+				if nextID, ok := m[j.Sequence+1]; ok {
+					next := r.jobs[nextID]
+					if next.Status == lifecycle.StateBlocked {
+						next.Status = lifecycle.StatePending
+						next.UpdatedAt = now
+						r.jobs[nextID] = next
+					}
+				}
+			}
+		}
+	}
+	return count, nil
+}
+
+func (r *repo) BulkPurgeDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var count int64
+
+	for id, j := range r.jobs {
+		if r.matchesDLQFilter(j, filter) {
+			delete(r.jobs, id)
+			if m, ok := r.chain[j.ChainID]; ok {
+				delete(m, j.Sequence)
+				if len(m) == 0 {
+					delete(r.chain, j.ChainID)
+				}
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (r *repo) CountDLQ(ctx context.Context) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var count int64
+	for _, j := range r.jobs {
+		if j.Status == lifecycle.StateFailed || j.Status == lifecycle.StateDeadLettered {
+			count++
+		}
+	}
+	return count, nil
+}

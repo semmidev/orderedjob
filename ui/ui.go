@@ -93,6 +93,9 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 	mux.HandleFunc("/api/enqueue", s.handleEnqueue)
 	mux.HandleFunc("/api/job-types", s.handleJobTypes)
 	mux.HandleFunc("/api/events", s.handleSSEEvents)
+	mux.HandleFunc("/api/dlq/bulk-replay", s.handleBulkReplayDLQ)
+	mux.HandleFunc("/api/dlq/bulk-skip", s.handleBulkSkipDLQ)
+	mux.HandleFunc("/api/dlq/bulk-purge", s.handleBulkPurgeDLQ)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -410,4 +413,76 @@ func respondJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) parseJobFilterFromBody(r *http.Request) orderedjob.JobFilter {
+	var body struct {
+		ChainID  string `json:"chain_id"`
+		JobType  string `json:"job_type"`
+		TenantID string `json:"tenant_id"`
+		TraceID  string `json:"trace_id"`
+		Search   string `json:"search"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	return orderedjob.JobFilter{
+		ChainID:  body.ChainID,
+		JobType:  body.JobType,
+		TenantID: body.TenantID,
+		TraceID:  body.TraceID,
+		Search:   body.Search,
+	}
+}
+
+func (s *Server) handleBulkReplayDLQ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.ReadOnly {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "Dashboard is in read-only mode"})
+		return
+	}
+	filter := s.parseJobFilterFromBody(r)
+	affected, err := s.repo.BulkReplayDLQ(r.Context(), filter)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"affected": affected, "message": fmt.Sprintf("%d DLQ jobs replayed successfully", affected)})
+}
+
+func (s *Server) handleBulkSkipDLQ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.ReadOnly {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "Dashboard is in read-only mode"})
+		return
+	}
+	filter := s.parseJobFilterFromBody(r)
+	affected, err := s.repo.BulkSkipDLQ(r.Context(), filter)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"affected": affected, "message": fmt.Sprintf("%d DLQ jobs skipped successfully", affected)})
+}
+
+func (s *Server) handleBulkPurgeDLQ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.ReadOnly {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "Dashboard is in read-only mode"})
+		return
+	}
+	filter := s.parseJobFilterFromBody(r)
+	affected, err := s.repo.BulkPurgeDLQ(r.Context(), filter)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"affected": affected, "message": fmt.Sprintf("%d DLQ jobs purged successfully", affected)})
 }

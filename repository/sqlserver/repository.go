@@ -1013,3 +1013,121 @@ func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilt
 
 	return summaries, total, nil
 }
+
+func (r *Repository) buildDLQWhere(filter orderedjob.JobFilter) (string, []any) {
+	conds := []string{"status IN ('FAILED', 'DEAD_LETTERED')"}
+	var args []any
+
+	if filter.ChainID != "" {
+		conds = append(conds, "chain_id = ?")
+		args = append(args, filter.ChainID)
+	}
+	if filter.JobType != "" {
+		conds = append(conds, "job_type = ?")
+		args = append(args, filter.JobType)
+	}
+	if filter.TenantID != "" {
+		conds = append(conds, "tenant_id = ?")
+		args = append(args, filter.TenantID)
+	}
+	if filter.TraceID != "" {
+		conds = append(conds, "trace_id = ?")
+		args = append(args, filter.TraceID)
+	}
+	if filter.Search != "" {
+		conds = append(conds, "(CAST(id AS NVARCHAR(36)) LIKE ? OR idempotency_key LIKE ? OR trace_id LIKE ? OR last_error LIKE ?)")
+		args = append(args, "%"+filter.Search+"%", "%"+filter.Search+"%", "%"+filter.Search+"%", "%"+filter.Search+"%")
+	}
+
+	return strings.Join(conds, " AND "), args
+}
+
+func (r *Repository) BulkReplayDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	whereStmt, args := r.buildDLQWhere(filter)
+	// #nosec G201
+	query := fmt.Sprintf(`
+		UPDATE ordered_jobs
+		SET status='PENDING', attempt=0, last_error='', available_at=GETUTCDATE(), updated_at=GETUTCDATE(), lease_until=NULL
+		WHERE %s
+	`, whereStmt)
+
+	res, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *Repository) BulkSkipDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	whereStmt, args := r.buildDLQWhere(filter)
+	// #nosec G201
+	selectQuery := fmt.Sprintf("SELECT chain_id, sequence FROM ordered_jobs WHERE %s", whereStmt)
+	rows, err := tx.QueryContext(ctx, selectQuery, args...)
+	if err != nil {
+		return 0, err
+	}
+	type item struct {
+		chainID string
+		seq     int64
+	}
+	var items []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.chainID, &it.seq); err == nil {
+			items = append(items, it)
+		}
+	}
+	_ = rows.Close()
+
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	// #nosec G201
+	updateQuery := fmt.Sprintf(`
+		UPDATE ordered_jobs
+		SET status='COMPLETED', completed_at=GETUTCDATE(), updated_at=GETUTCDATE(), lease_until=NULL
+		WHERE %s
+	`, whereStmt)
+	res, err := tx.ExecContext(ctx, updateQuery, args...)
+	if err != nil {
+		return 0, err
+	}
+	affected, _ := res.RowsAffected()
+
+	for _, it := range items {
+		_, _ = tx.ExecContext(ctx, `
+			UPDATE ordered_jobs
+			SET status='PENDING', updated_at=GETUTCDATE()
+			WHERE chain_id=? AND sequence=?+1 AND status='BLOCKED'
+		`, it.chainID, it.seq)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return affected, nil
+}
+
+func (r *Repository) BulkPurgeDLQ(ctx context.Context, filter orderedjob.JobFilter) (int64, error) {
+	whereStmt, args := r.buildDLQWhere(filter)
+	// #nosec G201
+	query := fmt.Sprintf("DELETE FROM ordered_jobs WHERE %s", whereStmt)
+	res, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *Repository) CountDLQ(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM ordered_jobs WHERE status IN ('FAILED', 'DEAD_LETTERED')").Scan(&count)
+	return count, err
+}

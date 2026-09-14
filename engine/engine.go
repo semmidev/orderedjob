@@ -22,6 +22,9 @@ var WithNotify = orderedjob.WithNotify
 var WithOrderingMode = orderedjob.WithOrderingMode
 var WithTracer = orderedjob.WithTracer
 var WithTracerProvider = orderedjob.WithTracerProvider
+var WithEventListener = orderedjob.WithEventListener
+var WithWebhook = orderedjob.WithWebhook
+var WithDLQThreshold = orderedjob.WithDLQThreshold
 
 func RegisterTyped[T any](e *Engine, jobType string, fn func(ctx context.Context, job orderedjob.Job, payload T) error) {
 	orderedjob.RegisterTyped(e, jobType, fn)

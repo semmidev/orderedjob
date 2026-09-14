@@ -59,10 +59,10 @@ Aspek ini memastikan pustaka tahan terhadap kegagalan infrastruktur, *unhandled 
 - [ ] **Integration Circuit Breaker**: Jika layanan eksternal (seperti payment gateway atau email provider) *down*, circuit breaker otomatis memjeda (*pause*) klaim untuk `job_type` tersebut sementara waktu untuk mencegah *flapping* dan lonjakan retry gagal.
 
 ### 2.3 Advanced DLQ Operations & Management
-- [ ] **Bulk Replay API & UI Action**: Kemampuan untuk melakukan *replay* masal pada ribuan job di DLQ berdasarkan filter (misal: rentang waktu, `job_type`, atau pesan error tertentu).
-- [ ] **Bulk Skip & Bulk Purge**: Fitur pembersihan atau pengabaian masal untuk job yang sudah *obsolete*.
-- [ ] **Payload Repair & Re-enqueue**: Fasilitas untuk mengubah *payload* JSON job yang salah format pada DLQ sebelum di-replay kembali ke antrean.
-- [ ] **Automated Poison Pill Quarantine**: Otomatis mengidentifikasi job yang terus-menerus memicu *crash* dan mengisolasinya dari antrean utama.
+- [x] **Bulk Replay API & UI Action**: Kemampuan untuk melakukan *replay* masal pada ribuan job di DLQ berdasarkan filter (misal: rentang waktu, `job_type`, atau pesan error tertentu).
+- [x] **Bulk Skip & Bulk Purge**: Fitur pembersihan atau pengabaian masal untuk job yang sudah *obsolete*.
+- [x] **Payload Repair & Re-enqueue**: Fasilitas untuk mengubah *payload* JSON job yang salah format pada DLQ sebelum di-replay kembali ke antrean.
+- [x] **Automated Poison Pill Quarantine**: Otomatis mengidentifikasi job yang terus-menerus memicu *crash* dan mengisolasinya dari antrean utama.
 
 ---
 
@@ -83,11 +83,11 @@ Saat ini tabel `ordered_jobs` hanya menyimpan status terakhir.
 - [ ] **State History Table (`ordered_job_events`)**: Pencatatan riwayat setiap perubahan status job (misal: `PENDING` ➔ `PROCESSING` ➔ `RETRYING` ➔ `PROCESSING` ➔ `COMPLETED`) beserta timestamp, `worker_id`, durasi, dan `error_message` untuk analisa post-mortem.
 
 ### 3.3 Alerting Hooks & Event Webhooks
-- [ ] **Engine Event Listeners**: Event callback interface untuk mendengarkan kejadian krusial:
+- [x] **Engine Event Listeners**: Event callback interface untuk mendengarkan kejadian krusial:
   - `OnJobFailed(job, err)`
   - `OnChainBlocked(chainID, job)`
   - `OnDLQThresholdExceeded(count)`
-- [ ] **Webhook Dispatcher**: Pengiriman notifikasi HTTP Webhook/Slack otomatis ketika antrean bermasalah.
+- [x] **Webhook Dispatcher**: Pengiriman notifikasi HTTP Webhook/Slack otomatis ketika antrean bermasalah.
 
 ---
 

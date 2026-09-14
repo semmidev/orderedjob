@@ -194,9 +194,20 @@
           </div>
         </div>
 
-        <button onclick="fetchData()" class="bg-card hover:bg-canvas border border-border text-warm hover:text-ink text-xs px-3 py-2 rounded-lg shadow-subtle transition-all flex items-center justify-center space-x-1">
-          <span>🔄 Refresh</span>
-        </button>
+        <div class="flex items-center space-x-2">
+          <button onclick="confirmBulkDLQAction('replay')" class="bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-600/30 text-emerald-600 text-xs px-3 py-2 rounded-lg transition-all font-medium flex items-center space-x-1">
+            <span>🔄 Bulk Replay</span>
+          </button>
+          <button onclick="confirmBulkDLQAction('skip')" class="bg-amber-600/10 hover:bg-amber-600/20 border border-amber-600/30 text-amber-600 text-xs px-3 py-2 rounded-lg transition-all font-medium flex items-center space-x-1">
+            <span>⏭️ Bulk Skip</span>
+          </button>
+          <button onclick="confirmBulkDLQAction('purge')" class="bg-rose-600/10 hover:bg-rose-600/20 border border-rose-600/30 text-rose-600 text-xs px-3 py-2 rounded-lg transition-all font-medium flex items-center space-x-1">
+            <span>🗑️ Bulk Purge</span>
+          </button>
+          <button onclick="fetchData()" class="bg-card hover:bg-canvas border border-border text-warm hover:text-ink text-xs px-3 py-2 rounded-lg shadow-subtle transition-all flex items-center justify-center space-x-1">
+            <span>🔄 Refresh</span>
+          </button>
+        </div>
       </div>
 
       <!-- Jobs Table Card -->
@@ -956,6 +967,61 @@
           fetchData();
         })
         .catch(err => alert('Action failed: ' + err));
+    }
+
+    async function confirmBulkDLQAction(actionType) {
+      const chainID = document.getElementById('chainFilterInput').value.trim();
+      const search = document.getElementById('searchInput').value.trim();
+      const tenantID = document.getElementById('tenantFilterInput').value.trim();
+      const traceID = document.getElementById('traceFilterInput').value.trim();
+
+      let filterSummary = [];
+      if (chainID) filterSummary.push(`Chain: ${chainID}`);
+      if (tenantID) filterSummary.push(`Tenant: ${tenantID}`);
+      if (traceID) filterSummary.push(`Trace: ${traceID}`);
+      if (search) filterSummary.push(`Search: ${search}`);
+      const filterDesc = filterSummary.length > 0 ? filterSummary.join(', ') : 'All DLQ / FAILED Jobs';
+
+      let title = '', actionText = '', endpoint = '';
+      if (actionType === 'replay') {
+        title = 'Confirm Bulk Replay DLQ';
+        actionText = `Are you sure you want to REPLAY all DLQ/FAILED jobs matching filter [${filterDesc}]?`;
+        endpoint = rootAPI + '/dlq/bulk-replay';
+      } else if (actionType === 'skip') {
+        title = 'Confirm Bulk Skip DLQ';
+        actionText = `Are you sure you want to SKIP all DLQ/FAILED jobs matching filter [${filterDesc}]? Next blocked jobs will be promoted.`;
+        endpoint = rootAPI + '/dlq/bulk-skip';
+      } else if (actionType === 'purge') {
+        title = 'Confirm Bulk Purge DLQ';
+        actionText = `⚠️ WARNING: Are you sure you want to PERMANENTLY DELETE all DLQ/FAILED jobs matching filter [${filterDesc}]? This cannot be undone.`;
+        endpoint = rootAPI + '/dlq/bulk-purge';
+      }
+
+      if (!confirm(`${title}\n\n${actionText}`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chain_id: chainID,
+            search: search,
+            tenant_id: tenantID,
+            trace_id: traceID,
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(data.message || `${actionType} completed`);
+          fetchData();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Network error: ${err.message}`);
+      }
     }
 
     function openEnqueueModal() {

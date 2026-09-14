@@ -44,6 +44,8 @@ type Engine struct {
 	panicHandler     PanicHandler
 	retryOnPanic     bool
 	activeLeases     atomic.Int64
+	eventListener    EventListener
+	dlqThreshold     int64
 
 	// lifecycle
 	ctx      context.Context
@@ -113,6 +115,15 @@ func WithTracerProvider(tp trace.TracerProvider) Option {
 		}
 	}
 }
+func WithEventListener(l EventListener) Option {
+	return func(e *Engine) { e.eventListener = l }
+}
+func WithWebhook(cfg WebhookConfig) Option {
+	return func(e *Engine) { e.eventListener = NewWebhookDispatcher(cfg) }
+}
+func WithDLQThreshold(n int64) Option {
+	return func(e *Engine) { e.dlqThreshold = n }
+}
 
 func New(repo Repository, opts ...Option) *Engine {
 	e := &Engine{
@@ -122,6 +133,7 @@ func New(repo Repository, opts ...Option) *Engine {
 		retryPol:         retry.DefaultPolicy(),
 		metrics:          NoopMetrics{},
 		logger:           NoopLogger{},
+		eventListener:    NoopEventListener{},
 		workerID:         fmt.Sprintf("worker-%s", uuid.New().String()[:8]),
 		concurrency:      10,
 		pollInterval:     500 * time.Millisecond,
@@ -202,6 +214,18 @@ func (e *Engine) ReplayJob(ctx context.Context, id uuid.UUID) error {
 
 func (e *Engine) SkipJob(ctx context.Context, id uuid.UUID) error {
 	return e.repo.SkipJob(ctx, id)
+}
+
+func (e *Engine) BulkReplayDLQ(ctx context.Context, filter JobFilter) (int64, error) {
+	return e.repo.BulkReplayDLQ(ctx, filter)
+}
+
+func (e *Engine) BulkSkipDLQ(ctx context.Context, filter JobFilter) (int64, error) {
+	return e.repo.BulkSkipDLQ(ctx, filter)
+}
+
+func (e *Engine) BulkPurgeDLQ(ctx context.Context, filter JobFilter) (int64, error) {
+	return e.repo.BulkPurgeDLQ(ctx, filter)
 }
 
 // Schedule enqueues a job scheduled for execution at runAt.
@@ -449,8 +473,10 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 
 		_ = e.repo.Fail(e.ctx, job.ID, workerName, job.LeaseGeneration, execErr.Error(), true)
 		e.metrics.IncFailed(job.Type)
+		e.eventListener.OnJobFailed(e.ctx, job, execErr)
 		if mode == OrderingModeStrict {
 			e.metrics.IncBlockedChain()
+			e.eventListener.OnChainBlocked(e.ctx, job.ChainID, job)
 		}
 		e.logger.Error(e.ctx, "job failed terminally", append(LogJobAttrs(job), "error", execErr.Error(), "ordering_mode", mode)...)
 
@@ -505,6 +531,11 @@ func (e *Engine) recoveryLoop() {
 		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
+			if e.dlqThreshold > 0 {
+				if count, err := e.repo.CountDLQ(e.ctx); err == nil && count >= e.dlqThreshold {
+					e.eventListener.OnDLQThresholdExceeded(e.ctx, count)
+				}
+			}
 			recovered, err := e.repo.RecoverStale(e.ctx, 100, func(attempt int) time.Duration {
 				return e.retryPol.Backoff(attempt)
 			})

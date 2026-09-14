@@ -920,3 +920,55 @@ func TestEngine_OpenTelemetryTracing(t *testing.T) {
 	}
 	assert.True(t, foundConsumerSpan, "consumer span orderedjob.execute should be exported")
 }
+
+func TestEngine_BulkDLQOperations(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("BulkReplayDLQ", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo)
+
+		j1, _ := repo.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-replay-1", Sequence: 1, Type: "ReplayType"})
+		claimed, _ := repo.Claim(ctx, "w1", 10*time.Second)
+		_ = repo.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "err", true)
+
+		replayed, err := eng.BulkReplayDLQ(ctx, orderedjob.JobFilter{JobType: "ReplayType"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), replayed)
+
+		jCheck, _ := eng.Get(ctx, j1.ID)
+		assert.Equal(t, "PENDING", jCheck.Status)
+	})
+
+	t.Run("BulkSkipDLQ", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo)
+
+		j2, _ := repo.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-skip-1", Sequence: 1, Type: "SkipType"})
+		claimed, _ := repo.Claim(ctx, "w1", 10*time.Second)
+		_ = repo.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "err", true)
+
+		skipped, err := eng.BulkSkipDLQ(ctx, orderedjob.JobFilter{JobType: "SkipType"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), skipped)
+
+		jCheck, _ := eng.Get(ctx, j2.ID)
+		assert.Equal(t, "COMPLETED", jCheck.Status)
+	})
+
+	t.Run("BulkPurgeDLQ", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo)
+
+		j3, _ := repo.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-purge-1", Sequence: 1, Type: "PurgeType"})
+		claimed, _ := repo.Claim(ctx, "w1", 10*time.Second)
+		_ = repo.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "err", true)
+
+		purged, err := eng.BulkPurgeDLQ(ctx, orderedjob.JobFilter{JobType: "PurgeType"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), purged)
+
+		_, err = eng.Get(ctx, j3.ID)
+		assert.ErrorIs(t, err, orderedjob.ErrNotFound)
+	})
+}

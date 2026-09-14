@@ -265,4 +265,55 @@ func TestUIHandler_Endpoints(t *testing.T) {
 		assert.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 		assert.Contains(t, rec.Body.String(), "event: stats")
 	})
+
+	t.Run("POST /ui/api/dlq/bulk-replay, bulk-skip, bulk-purge", func(t *testing.T) {
+		repoLocal := memory.New()
+		handlerLocal := ui.NewHandler(repoLocal, ui.WithRootPath("/ui"))
+
+		jDLQ, err := repoLocal.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-bulk-api",
+			Sequence: 1,
+			Type:     "BulkJob",
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, jDLQ.ID)
+
+		claimed, err := repoLocal.Claim(ctx, "w1", 10)
+		require.NoError(t, err)
+		_ = repoLocal.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "err", true)
+
+		// Bulk Replay
+		bReplay, _ := json.Marshal(map[string]string{"chain_id": "chain-bulk-api"})
+		req := httptest.NewRequest(http.MethodPost, "/ui/api/dlq/bulk-replay", bytes.NewReader(bReplay))
+		rec := httptest.NewRecorder()
+		handlerLocal.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "replayed successfully")
+
+		// Re-fail & Bulk Skip
+		claimed, _ = repoLocal.Claim(ctx, "w1", 10)
+		_ = repoLocal.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "err", true)
+
+		bSkip, _ := json.Marshal(map[string]string{"job_type": "BulkJob"})
+		req = httptest.NewRequest(http.MethodPost, "/ui/api/dlq/bulk-skip", bytes.NewReader(bSkip))
+		rec = httptest.NewRecorder()
+		handlerLocal.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "skipped successfully")
+
+		// Re-enqueue, fail & Bulk Purge
+		jPurge, _ := repoLocal.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "chain-purge", Sequence: 1, Type: "PurgeJob"})
+		claimedPurge, _ := repoLocal.Claim(ctx, "w1", 10)
+		_ = repoLocal.Fail(ctx, claimedPurge.ID, claimedPurge.WorkerID, claimedPurge.LeaseGeneration, "err", true)
+
+		bPurge, _ := json.Marshal(map[string]string{"job_type": "PurgeJob"})
+		req = httptest.NewRequest(http.MethodPost, "/ui/api/dlq/bulk-purge", bytes.NewReader(bPurge))
+		rec = httptest.NewRecorder()
+		handlerLocal.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "purged successfully")
+
+		_, err = repoLocal.Get(ctx, jPurge.ID)
+		assert.ErrorIs(t, err, orderedjob.ErrNotFound)
+	})
 }

@@ -43,6 +43,10 @@ type Repository interface {
 	ReplayJobWithPayload(ctx context.Context, id uuid.UUID, newPayload json.RawMessage) error
 	SkipJob(ctx context.Context, id uuid.UUID) error
 	RescheduleJob(ctx context.Context, id uuid.UUID, availableAt time.Time) (Job, error)
+	BulkReplayDLQ(ctx context.Context, filter JobFilter) (int64, error)
+	BulkSkipDLQ(ctx context.Context, filter JobFilter) (int64, error)
+	BulkPurgeDLQ(ctx context.Context, filter JobFilter) (int64, error)
+	CountDLQ(ctx context.Context) (int64, error)
 
 	// Make next eligible after completion (C5)
 	PromoteNext(ctx context.Context, chainID string, completedSeq int64) error
