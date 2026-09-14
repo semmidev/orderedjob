@@ -455,7 +455,7 @@
             <div class="font-semibold text-ink">${j.chain_id}</div>
             <div class="text-[11px] text-warm">Seq: ${j.sequence}</div>
           </td>
-          <td class="py-3 px-4 font-mono text-warm">${j.job_type}</td>
+          <td class="py-3 px-4 font-mono text-warm">${j.type || j.job_type || '-'}</td>
           <td class="py-3 px-4">${getStatusBadge(j.status)}</td>
           <td class="py-3 px-4 text-warm">${j.attempt} / ${j.max_attempts}</td>
           <td class="py-3 px-4 text-warm">${formatDate(j.created_at)}</td>
@@ -565,12 +565,12 @@
       fetch(rootAPI + '/jobs/' + id)
         .then(res => res.json())
         .then(j => {
-          document.getElementById('detailJobTitle').innerText = j.job_type || 'Job Details';
+          document.getElementById('detailJobTitle').innerText = (j.type || j.job_type || 'Job Details');
           document.getElementById('detailJobUUID').innerText = j.id;
           document.getElementById('detailStatusBadge').innerHTML = getStatusBadge(j.status);
           document.getElementById('detailChainID').innerText = j.chain_id;
           document.getElementById('detailSequence').innerText = j.sequence;
-          document.getElementById('detailType').innerText = j.job_type;
+          document.getElementById('detailType').innerText = (j.type || j.job_type || '-');
           document.getElementById('detailAttempt').innerText = `${j.attempt} / ${j.max_attempts}`;
           document.getElementById('detailWorkerID').innerText = j.worker_id || 'None';
           document.getElementById('detailIdempotencyKey').innerText = j.idempotency_key || 'None';
