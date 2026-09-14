@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/semmidev/orderedjob/lease"
 	"github.com/semmidev/orderedjob/retry"
 )
+
+// PanicHandler handles panics caught during job execution.
+type PanicHandler func(ctx context.Context, job Job, panicVal any, stack []byte) error
 
 // Engine is the core orchestrator.
 type Engine struct {
@@ -31,6 +35,8 @@ type Engine struct {
 	allowGap         bool
 	orderingMode     string // strict, skip-on-failure, dead-letter-and-continue
 	orderingStrategy OrderingStrategyResolver
+	panicHandler     PanicHandler
+	retryOnPanic     bool
 
 	// lifecycle
 	ctx      context.Context
@@ -83,6 +89,12 @@ func WithOrderingMode(mode string) Option {
 }
 func WithOrderingStrategy(s OrderingStrategyResolver) Option {
 	return func(e *Engine) { e.orderingStrategy = s }
+}
+func WithPanicHandler(h PanicHandler) Option {
+	return func(e *Engine) { e.panicHandler = h }
+}
+func WithRetryOnPanic(retry bool) Option {
+	return func(e *Engine) { e.retryOnPanic = retry }
 }
 
 func New(repo Repository, opts ...Option) *Engine {
@@ -173,8 +185,31 @@ func (e *Engine) SkipJob(ctx context.Context, id uuid.UUID) error {
 	return e.repo.SkipJob(ctx, id)
 }
 
+// Schedule enqueues a job scheduled for execution at runAt.
+func (e *Engine) Schedule(ctx context.Context, req EnqueueRequest, runAt time.Time) (Job, error) {
+	req.AvailableAt = &runAt
+	return e.Enqueue(ctx, req)
+}
+
+// EnqueueDelayed enqueues a job scheduled for execution after delay.
+func (e *Engine) EnqueueDelayed(ctx context.Context, req EnqueueRequest, delay time.Duration) (Job, error) {
+	runAt := time.Now().Add(delay)
+	req.AvailableAt = &runAt
+	return e.Enqueue(ctx, req)
+}
+
+// RescheduleJob modifies the scheduled available_at timestamp of a job.
+func (e *Engine) RescheduleJob(ctx context.Context, id uuid.UUID, newAvailableAt time.Time) (Job, error) {
+	return e.repo.RescheduleJob(ctx, id, newAvailableAt)
+}
+
 func (e *Engine) listenNotifyLoop() {
-	defer e.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error(e.ctx, "listenNotifyLoop recovered from panic", "panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
+		}
+		e.wg.Done()
+	}()
 	err := e.repo.Listen(e.ctx, func(chainID string) {
 		e.NotifyChain(chainID)
 	})
@@ -230,7 +265,12 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 
 // workerLoop polls and executes.
 func (e *Engine) workerLoop(idx int) {
-	defer e.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error(e.ctx, "workerLoop recovered from panic", "worker_idx", idx, "panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
+		}
+		e.wg.Done()
+	}()
 	workerName := fmt.Sprintf("%s-%d", e.workerID, idx)
 
 	ticker := time.NewTicker(e.pollInterval)
@@ -285,9 +325,33 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 		defer cancel()
 	}
 
-	execErr := h.Handle(execCtx, job)
-	dur := time.Since(start)
-	e.metrics.ObserveExecDuration(job.Type, dur)
+	var execErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				dur := time.Since(start)
+				e.metrics.ObserveExecDuration(job.Type, dur)
+				stack := debug.Stack()
+				e.metrics.IncPanics(job.Type)
+
+				e.logger.Error(execCtx, "job handler panicked", append(LogJobAttrs(job), "panic", fmt.Sprintf("%v", r), "stack", string(stack))...)
+
+				if e.panicHandler != nil {
+					execErr = e.panicHandler(execCtx, job, r, stack)
+				} else {
+					pErr := &PanicError{Value: r, Stack: stack}
+					if e.retryOnPanic {
+						execErr = Retryable(pErr)
+					} else {
+						execErr = NonRetryable(pErr)
+					}
+				}
+			}
+		}()
+		execErr = h.Handle(execCtx, job)
+		dur := time.Since(start)
+		e.metrics.ObserveExecDuration(job.Type, dur)
+	}()
 
 	hcancel()
 
@@ -343,6 +407,11 @@ func (e *Engine) tryClaimAndExecute(workerName string) {
 }
 
 func (e *Engine) heartbeatLoop(ctx context.Context, job Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error(ctx, "heartbeatLoop recovered from panic", "job_id", job.ID.String(), "panic", fmt.Sprintf("%v", r))
+		}
+	}()
 	ticker := time.NewTicker(e.leaseMgr.Heartbeat)
 	defer ticker.Stop()
 	for {
@@ -360,7 +429,12 @@ func (e *Engine) heartbeatLoop(ctx context.Context, job Job) {
 }
 
 func (e *Engine) recoveryLoop() {
-	defer e.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error(e.ctx, "recoveryLoop recovered from panic", "panic", fmt.Sprintf("%v", r))
+		}
+		e.wg.Done()
+	}()
 	ticker := time.NewTicker(e.recoveryInterval)
 	defer ticker.Stop()
 	for {

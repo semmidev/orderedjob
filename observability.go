@@ -18,6 +18,7 @@ type Metrics interface {
 	IncClaimConflicts()
 	IncStaleRecovered(n int)
 	IncBlockedChain()
+	IncPanics(jobType string)
 }
 
 type NoopMetrics struct{}
@@ -32,6 +33,7 @@ func (NoopMetrics) SetActiveLeases(int)                       {}
 func (NoopMetrics) IncClaimConflicts()                        {}
 func (NoopMetrics) IncStaleRecovered(int)                     {}
 func (NoopMetrics) IncBlockedChain()                          {}
+func (NoopMetrics) IncPanics(string)                          {}
 
 // Logger structured minimal per section 26.
 type Logger interface {

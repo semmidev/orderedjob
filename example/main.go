@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/semmidev/orderedjob"
+	memoryRepo "github.com/semmidev/orderedjob/repository/memory"
 	pgRepo "github.com/semmidev/orderedjob/repository/postgres"
 	mssqlRepo "github.com/semmidev/orderedjob/repository/sqlserver"
 	"github.com/semmidev/orderedjob/retry"
@@ -44,6 +45,7 @@ type CustomMetrics struct {
 	Conflicts     atomic.Int64
 	ActiveLeases  atomic.Int64
 	BlockedChains atomic.Int64
+	Panics        atomic.Int64
 	TotalExecNs   atomic.Int64
 	ExecCount     atomic.Int64
 }
@@ -61,6 +63,7 @@ func (m *CustomMetrics) SetActiveLeases(n int)                             { m.A
 func (m *CustomMetrics) IncClaimConflicts()                                { m.Conflicts.Add(1) }
 func (m *CustomMetrics) IncStaleRecovered(n int)                           { m.Recovered.Add(int64(n)) }
 func (m *CustomMetrics) IncBlockedChain()                                  { m.BlockedChains.Add(1) }
+func (m *CustomMetrics) IncPanics(jobType string)                          { m.Panics.Add(1) }
 
 func (m *CustomMetrics) PrintSummary(dbEngine string) {
 	fmt.Printf("\n📊 --- Metrics Summary for [%s] (Prometheus Standard) ---\n", dbEngine)
@@ -71,6 +74,7 @@ func (m *CustomMetrics) PrintSummary(dbEngine string) {
 	fmt.Printf("Recovered Jobs   (orderedjob_stale_recovered_total)      : %d\n", m.Recovered.Load())
 	fmt.Printf("Claim Conflicts  (orderedjob_claim_conflicts_total)      : %d\n", m.Conflicts.Load())
 	fmt.Printf("Blocked Chains   (orderedjob_blocked_chains_total)       : %d\n", m.BlockedChains.Load())
+	fmt.Printf("Panics Caught    (orderedjob_panics_total)               : %d\n", m.Panics.Load())
 	fmt.Printf("Active Leases    (orderedjob_active_leases)              : %d\n", m.ActiveLeases.Load())
 
 	count := m.ExecCount.Load()
@@ -82,12 +86,19 @@ func (m *CustomMetrics) PrintSummary(dbEngine string) {
 }
 
 func main() {
-	db := flag.String("db", "sqlserver", "database engine to use: postgres | sqlserver")
+	db := flag.String("db", "memory", "database engine to use: memory | postgres | sqlserver")
 	flag.Parse()
 
 	ctx := context.Background()
 
 	switch *db {
+	case "memory":
+		fmt.Println("\n================================================================")
+		fmt.Println("🚀 STARTING ORDEREDJOB DEMO (In-Memory ENGINE)")
+		fmt.Println("================================================================")
+		repo := memoryRepo.New()
+		startServer(ctx, repo, "In-Memory")
+
 	case "postgres":
 		fmt.Println("\n================================================================")
 		fmt.Println("🚀 STARTING ORDEREDJOB DEMO (PostgreSQL ENGINE)")
@@ -111,7 +122,7 @@ func main() {
 		startServer(ctx, repo, "SQL Server")
 
 	default:
-		fmt.Fprintf(os.Stderr, "❌ Unknown -db value %q. Valid options: postgres, sqlserver\n", *db)
+		fmt.Fprintf(os.Stderr, "❌ Unknown -db value %q. Valid options: memory, postgres, sqlserver\n", *db)
 		flag.Usage()
 		os.Exit(1)
 	}

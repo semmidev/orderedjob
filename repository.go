@@ -2,6 +2,7 @@ package orderedjob
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +40,9 @@ type Repository interface {
 	// Recovery & DLQ Operations
 	RecoverStale(ctx context.Context, limit int, retryPolicy func(attempt int) time.Duration) (int, error)
 	ReplayJob(ctx context.Context, id uuid.UUID) error
+	ReplayJobWithPayload(ctx context.Context, id uuid.UUID, newPayload json.RawMessage) error
 	SkipJob(ctx context.Context, id uuid.UUID) error
+	RescheduleJob(ctx context.Context, id uuid.UUID, availableAt time.Time) (Job, error)
 
 	// Make next eligible after completion (C5)
 	PromoteNext(ctx context.Context, chainID string, completedSeq int64) error
@@ -58,14 +61,17 @@ type Repository interface {
 }
 
 type JobFilter struct {
-	ChainID  string
-	Status   string
-	JobType  string
-	Search   string
-	OrderBy  string
-	OrderDir string
-	Offset   int
-	Limit    int
+	ChainID       string
+	Status        string
+	JobType       string
+	TenantID      string
+	TraceID       string
+	Search        string
+	OrderBy       string
+	OrderDir      string
+	Offset        int
+	Limit         int
+	ScheduledOnly bool
 }
 
 type ChainFilter struct {
@@ -86,6 +92,7 @@ type Stats struct {
 	DeadLettered    int64 `json:"dead_lettered"`
 	CancelRequested int64 `json:"cancel_requested"`
 	Cancelled       int64 `json:"cancelled"`
+	Scheduled       int64 `json:"scheduled"`
 	Total           int64 `json:"total"`
 	ActiveChains    int64 `json:"active_chains"`
 }

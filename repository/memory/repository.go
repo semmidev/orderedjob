@@ -492,6 +492,29 @@ func (r *repo) ReplayJob(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *repo) ReplayJobWithPayload(ctx context.Context, id uuid.UUID, newPayload json.RawMessage) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[id]
+	if !ok {
+		return orderedjob.ErrNotFound
+	}
+	if j.Status == lifecycle.StateFailed || j.Status == lifecycle.StateCancelled || j.Status == lifecycle.StateDeadLettered {
+		now := time.Now().UTC()
+		j.Status = lifecycle.StatePending
+		j.Attempt = 0
+		j.LastError = ""
+		if len(newPayload) > 0 {
+			j.Payload = newPayload
+		}
+		j.AvailableAt = now
+		j.UpdatedAt = now
+		j.LeaseUntil = nil
+		r.jobs[id] = j
+	}
+	return nil
+}
+
 func (r *repo) SkipJob(ctx context.Context, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -521,6 +544,27 @@ func (r *repo) SkipJob(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *repo) RescheduleJob(ctx context.Context, id uuid.UUID, availableAt time.Time) (orderedjob.Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	j, exists := r.jobs[id]
+	if !exists {
+		return orderedjob.Job{}, orderedjob.ErrNotFound
+	}
+
+	if j.Status != lifecycle.StatePending && j.Status != lifecycle.StateRetrying {
+		return orderedjob.Job{}, orderedjob.ErrJobNotEligible
+	}
+
+	now := time.Now().UTC()
+	j.AvailableAt = availableAt
+	j.UpdatedAt = now
+	r.jobs[id] = j
+
+	return j, nil
+}
+
 func (r *repo) GetStats(ctx context.Context) (orderedjob.Stats, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -528,8 +572,12 @@ func (r *repo) GetStats(ctx context.Context) (orderedjob.Stats, error) {
 	var stats orderedjob.Stats
 	stats.Total = int64(len(r.jobs))
 	stats.ActiveChains = int64(len(r.chain))
+	now := time.Now().UTC()
 
 	for _, j := range r.jobs {
+		if (j.Status == lifecycle.StatePending || j.Status == lifecycle.StateRetrying) && j.AvailableAt.After(now) {
+			stats.Scheduled++
+		}
 		switch j.Status {
 		case lifecycle.StatePending:
 			stats.Pending++
@@ -561,8 +609,14 @@ func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]ord
 
 	var matched []orderedjob.Job
 	search := strings.ToLower(filter.Search)
+	now := time.Now().UTC()
 
 	for _, j := range r.jobs {
+		if filter.ScheduledOnly {
+			if (j.Status != lifecycle.StatePending && j.Status != lifecycle.StateRetrying) || !j.AvailableAt.After(now) {
+				continue
+			}
+		}
 		if filter.ChainID != "" && j.ChainID != filter.ChainID {
 			continue
 		}
@@ -570,6 +624,12 @@ func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]ord
 			continue
 		}
 		if filter.JobType != "" && j.Type != filter.JobType {
+			continue
+		}
+		if filter.TenantID != "" && j.TenantID != filter.TenantID {
+			continue
+		}
+		if filter.TraceID != "" && j.TraceID != filter.TraceID {
 			continue
 		}
 		if search != "" {

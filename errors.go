@@ -15,6 +15,8 @@ var (
 	ErrHandlerNotFound   = errors.New("orderedjob: handler not found")
 	ErrNotClaimable      = errors.New("orderedjob: job not claimable")
 	ErrDuplicateChainSeq = errors.New("orderedjob: duplicate chain_id, sequence")
+	ErrJobNotEligible    = errors.New("orderedjob: job not eligible for rescheduling")
+	ErrValidationFailed  = errors.New("orderedjob: payload validation failed")
 )
 
 // RetryableError marks a transient failure that should be retried.
@@ -60,4 +62,17 @@ func IsRetryable(err error) bool {
 func IsNonRetryable(err error) bool {
 	var nre NonRetryableError
 	return errors.As(err, &nre)
+}
+
+// PanicError encapsulates a panic value and stack trace captured during job execution.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (p *PanicError) Error() string {
+	if len(p.Stack) > 0 {
+		return fmt.Sprintf("panic: %v\nstacktrace:\n%s", p.Value, string(p.Stack))
+	}
+	return fmt.Sprintf("panic: %v", p.Value)
 }

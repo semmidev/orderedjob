@@ -36,7 +36,7 @@ Saat ini worker mengambil job berdasarkan pola global poll/claim. Jika 1 tenant 
 
 ### 1.3 Recurring & Cron Job Scheduler Engine
 - [ ] **Cron Engine Integration**: Kemampuan mendefinisikan job berulang (*recurring jobs*) dengan sintaks Cron (misal: `0 0 * * *`) yang otomatis meng-enqueue job baru pada chain yang ditentukan secara presisi.
-- [ ] **Scheduled / Delayed Jobs Management**: Peningkatan manajemen job dengan `available_at` di masa depan, dilengkapi index khusus agar tidak memperlambat klaim job instan.
+- [x] **Scheduled / Delayed Jobs Management**: Peningkatan manajemen job dengan `available_at` di masa depan, dilengkapi index khusus agar tidak memperlambat klaim job instan.
 
 ### 1.4 Job DAG, Chaining & Dependency Workflow Engine
 - [ ] **Cross-Chain / Multi-Job Dependencies (DAG)**: Mendukung kondisi di mana Job C pada Chain Z baru boleh berjalan jika Job A (Chain X) DAN Job B (Chain Y) telah selesai (`COMPLETED`).
@@ -53,7 +53,7 @@ Saat ini worker mengambil job berdasarkan pola global poll/claim. Jika 1 tenant 
 Aspek ini memastikan pustaka tahan terhadap kegagalan infrastruktur, *unhandled panics*, dan memberikan kendali penuh terhadap penanganan error.
 
 ### 2.1 Worker Panic Recovery Guard
-- [ ] **Panic Isolation & Stacktrace Capture**: Menangkap `panic` pada handler goroutine agar worker pool tidak pernah *crash*, mencatat *stack trace* lengkap ke log, dan menandai job sebagai `FAILED` terminally atau di-retry dengan aman.
+- [x] **Panic Isolation & Stacktrace Capture**: Menangkap `panic` pada handler goroutine agar worker pool tidak pernah *crash*, mencatat *stack trace* lengkap ke log, dan menandai job sebagai `FAILED` terminally atau di-retry dengan aman.
 
 ### 2.2 Dynamic Circuit Breaker per Job Type / Service
 - [ ] **Integration Circuit Breaker**: Jika layanan eksternal (seperti payment gateway atau email provider) *down*, circuit breaker otomatis memjeda (*pause*) klaim untuk `job_type` tersebut sementara waktu untuk mencegah *flapping* dan lonjakan retry gagal.
@@ -112,7 +112,7 @@ Memudahkan pengembang dalam membangun, menguji, dan memelihara aplikasi yang men
   - `orderedjob migrate up --db=postgres --url=...`
 
 ### 4.4 Strongly-Typed Handler Generators
-- [ ] **Generic Payload Helper / CodeGen**: Peningkatan `RegisterTyped[T]` dengan schema validator (misal: JSON Schema / Struct validation) sebelum payload dieksekusi oleh handler.
+- [x] **Generic Payload Helper / CodeGen**: Peningkatan `RegisterTyped[T]` dengan schema validator (misal: JSON Schema / Struct validation) sebelum payload dieksekusi oleh handler.
 
 ---
 
@@ -121,15 +121,15 @@ Memudahkan pengembang dalam membangun, menguji, dan memelihara aplikasi yang men
 Meningkatkan kapabilitas antarmuka monitoring bawaan (`ui/`).
 
 ### 5.1 Real-Time Streaming (Server-Sent Events / WebSockets)
-- [ ] **Live SSE/WebSocket Metrics**: Pembaruan grafik dan statistik secara *real-time* tanpa perlu perulangan *polling* HTTP biasa dari browser.
+- [x] **Live SSE/WebSocket Metrics**: Pembaruan grafik dan statistik secara *real-time* tanpa perlu perulangan *polling* HTTP biasa dari browser.
 
 ### 5.2 Interactive Payload Inspector & Modal Editor
-- [ ] **Payload Viewer with Syntax Highlighting**: Tampilan JSON payload yang rapi dengan pencarian.
-- [ ] **Edit & Replay Modal**: Form interaktif untuk memperbaiki isi payload JSON yang salah sebelum di-replay ke antrean.
+- [x] **Payload Viewer with Syntax Highlighting**: Tampilan JSON payload yang rapi dengan pencarian.
+- [x] **Edit & Replay Modal**: Form interaktif untuk memperbaiki isi payload JSON yang salah sebelum di-replay ke antrean.
 
 ### 5.3 Multi-tenant & Advanced Filtering UI
-- [ ] **Tenant-aware Dashboard**: Filter antrean berdasarkan `tenant_id`, `trace_id`, dan rentang tanggal eksekusi.
-- [ ] **Chain Dependency Graph Viewer**: Visualisasi status urutan job pada suatu chain secara grafis (diagram garis waktu urutan).
+- [x] **Tenant-aware Dashboard**: Filter antrean berdasarkan `tenant_id`, `trace_id`, dan rentang tanggal eksekusi.
+- [x] **Chain Dependency Graph Viewer**: Visualisasi status urutan job pada suatu chain secara grafis (diagram garis waktu urutan).
 
 ### 5.4 Web UI Security & Authentication
 - [ ] **Auth Middleware & Protection**: Mendukung Basic Auth, JWT Token, atau custom HTTP middleware untuk mengamankan akses ke dashboard `/ui` dan REST API bawaannya.

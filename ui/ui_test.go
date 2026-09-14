@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/semmidev/orderedjob"
 	"github.com/semmidev/orderedjob/repository/memory"
@@ -176,5 +177,92 @@ func TestUIHandler_Endpoints(t *testing.T) {
 		j, err := repo.Get(ctx, jReplay.ID)
 		require.NoError(t, err)
 		assert.Equal(t, "PENDING", j.Status)
+	})
+
+	t.Run("POST /ui/api/jobs/{id}/reschedule", func(t *testing.T) {
+		jResched, err := repo.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-ui-resched",
+			Sequence: 1,
+			Type:     "ReschedJob",
+		})
+		require.NoError(t, err)
+
+		body := map[string]any{
+			"available_at": "2030-01-01T00:00:00Z",
+		}
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/ui/api/jobs/"+jResched.ID.String()+"/reschedule", bytes.NewReader(b))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		j, err := repo.Get(ctx, jResched.ID)
+		require.NoError(t, err)
+		assert.Equal(t, 2030, j.AvailableAt.Year())
+	})
+
+	t.Run("POST /ui/api/jobs/{id}/replay with payload", func(t *testing.T) {
+		repoLocal := memory.New()
+		handlerLocal := ui.NewHandler(repoLocal, ui.WithRootPath("/ui"))
+
+		jPayload, err := repoLocal.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-ui-payload-replay",
+			Sequence: 1,
+			Type:     "PayloadReplayJob",
+			Payload:  map[string]string{"old": "data"},
+		})
+		require.NoError(t, err)
+
+		claimed, err := repoLocal.Claim(ctx, "w-test", 10)
+		require.NoError(t, err)
+		err = repoLocal.Fail(ctx, claimed.ID, claimed.WorkerID, claimed.LeaseGeneration, "test err", true)
+		require.NoError(t, err)
+
+		body := map[string]any{
+			"payload": map[string]string{"new": "data"},
+		}
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/ui/api/jobs/"+jPayload.ID.String()+"/replay", bytes.NewReader(b))
+		rec := httptest.NewRecorder()
+		handlerLocal.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		j, err := repoLocal.Get(ctx, jPayload.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "PENDING", j.Status)
+		assert.JSONEq(t, `{"new":"data"}`, string(j.Payload))
+	})
+
+	t.Run("GET /ui/api/jobs with tenant_id and trace_id filters", func(t *testing.T) {
+		_, err := repo.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-ui-tenant",
+			Sequence: 1,
+			Type:     "TenantJob",
+			TenantID: "tenant-ui-123",
+			TraceID:  "trace-ui-456",
+		})
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/jobs?tenant_id=tenant-ui-123&trace_id=trace-ui-456", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var resp map[string]any
+		err = json.NewDecoder(rec.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, float64(1), resp["total"])
+	})
+
+	t.Run("GET /ui/api/events (SSE stream)", func(t *testing.T) {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/events", nil).WithContext(reqCtx)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
+		assert.Contains(t, rec.Body.String(), "event: stats")
 	})
 }

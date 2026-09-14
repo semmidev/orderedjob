@@ -594,6 +594,36 @@ func (r *Repository) ReplayJob(ctx context.Context, id uuid.UUID) error {
 	})
 }
 
+func (r *Repository) ReplayJobWithPayload(ctx context.Context, id uuid.UUID, newPayload json.RawMessage) error {
+	return withTx(ctx, r.pool, func(tx pgx.Tx) error {
+		var chainID string
+		var err error
+		if len(newPayload) > 0 {
+			err = tx.QueryRow(ctx, `
+				UPDATE ordered_jobs
+				SET payload=$1, status='PENDING', attempt=0, last_error=NULL, available_at=NOW(), updated_at=NOW(), lease_until=NULL
+				WHERE id=$2 AND status IN ('FAILED', 'CANCELLED', 'DEAD_LETTERED')
+				RETURNING chain_id
+			`, newPayload, id).Scan(&chainID)
+		} else {
+			err = tx.QueryRow(ctx, `
+				UPDATE ordered_jobs
+				SET status='PENDING', attempt=0, last_error=NULL, available_at=NOW(), updated_at=NOW(), lease_until=NULL
+				WHERE id=$1 AND status IN ('FAILED', 'CANCELLED', 'DEAD_LETTERED')
+				RETURNING chain_id
+			`, id).Scan(&chainID)
+		}
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return orderedjob.ErrNotFound
+			}
+			return err
+		}
+		_ = r.notifyTx(ctx, tx, chainID)
+		return nil
+	})
+}
+
 func (r *Repository) SkipJob(ctx context.Context, id uuid.UUID) error {
 	return withTx(ctx, r.pool, func(tx pgx.Tx) error {
 		var chainID string
@@ -621,6 +651,34 @@ func (r *Repository) SkipJob(ctx context.Context, id uuid.UUID) error {
 		_ = r.notifyTx(ctx, tx, chainID)
 		return nil
 	})
+}
+
+func (r *Repository) RescheduleJob(ctx context.Context, id uuid.UUID, availableAt time.Time) (orderedjob.Job, error) {
+	var job orderedjob.Job
+	err := withTx(ctx, r.pool, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `
+			UPDATE ordered_jobs
+			SET available_at = $1, updated_at = NOW()
+			WHERE id = $2 AND status IN ('PENDING', 'RETRYING')
+			RETURNING id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, ''), COALESCE(ordering_mode, 'strict')
+		`, availableAt, id)
+		err := row.Scan(
+			&job.ID, &job.ChainID, &job.Sequence, &job.Type, &job.Payload, &job.Status, &job.Attempt, &job.MaxAttempts, &job.AvailableAt, &job.DeadlineAt, &job.WorkerID, &job.LeaseUntil, &job.LeaseGeneration, &job.CreatedAt, &job.UpdatedAt, &job.StartedAt, &job.CompletedAt, &job.FailedAt, &job.IdempotencyKey, &job.TenantID, &job.LastError, &job.TraceID, &job.OrderingMode,
+		)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				var exists bool
+				_ = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ordered_jobs WHERE id = $1)`, id).Scan(&exists)
+				if exists {
+					return orderedjob.ErrJobNotEligible
+				}
+				return orderedjob.ErrNotFound
+			}
+			return err
+		}
+		return nil
+	})
+	return job, err
 }
 
 func (r *Repository) notify(ctx context.Context, chainID string) error {
@@ -746,6 +804,11 @@ func (r *Repository) GetStats(ctx context.Context) (orderedjob.Stats, error) {
 		return stats, err
 	}
 
+	err = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM ordered_jobs WHERE status IN ('PENDING', 'RETRYING') AND available_at > NOW()`).Scan(&stats.Scheduled)
+	if err != nil {
+		return stats, err
+	}
+
 	return stats, nil
 }
 
@@ -754,6 +817,9 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 	args := []any{}
 	argIdx := 1
 
+	if filter.ScheduledOnly {
+		whereClauses = append(whereClauses, "status IN ('PENDING', 'RETRYING') AND available_at > NOW()")
+	}
 	if filter.ChainID != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("chain_id = $%d", argIdx))
 		args = append(args, filter.ChainID)
@@ -767,6 +833,16 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 	if filter.JobType != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("job_type = $%d", argIdx))
 		args = append(args, filter.JobType)
+		argIdx++
+	}
+	if filter.TenantID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("tenant_id = $%d", argIdx))
+		args = append(args, filter.TenantID)
+		argIdx++
+	}
+	if filter.TraceID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("trace_id = $%d", argIdx))
+		args = append(args, filter.TraceID)
 		argIdx++
 	}
 	if filter.Search != "" {

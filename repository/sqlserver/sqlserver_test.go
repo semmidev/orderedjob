@@ -196,4 +196,32 @@ func TestSQLServerRepository_TableDriven(t *testing.T) {
 
 		assert.Equal(t, job1.ID, job2.ID, "idempotent enqueue must return existing job")
 	})
+
+	t.Run("Reschedule Operations and Scheduled Metric", func(t *testing.T) {
+		chainID := "mssql-resched-chain"
+		futureTime := time.Now().Add(1 * time.Hour)
+
+		req := orderedjob.EnqueueRequest{
+			ChainID:     chainID,
+			Sequence:    1,
+			Type:        "ScheduledJob",
+			AvailableAt: &futureTime,
+		}
+
+		j, err := repo.Enqueue(ctx, req)
+		require.NoError(t, err)
+
+		stats, err := repo.GetStats(ctx)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, stats.Scheduled, int64(1))
+
+		newAvailable := time.Now().Add(15 * time.Minute)
+		updated, err := repo.RescheduleJob(ctx, j.ID, newAvailable)
+		require.NoError(t, err)
+		assert.WithinDuration(t, newAvailable, updated.AvailableAt, 2*time.Second)
+
+		// Reschedule job that doesn't exist
+		_, err = repo.RescheduleJob(ctx, [16]byte{}, newAvailable)
+		assert.ErrorIs(t, err, orderedjob.ErrNotFound)
+	})
 }

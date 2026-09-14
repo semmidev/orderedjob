@@ -38,6 +38,11 @@ CREATE INDEX IF NOT EXISTS idx_ordered_jobs_claim
 ON ordered_jobs (status, available_at, created_at)
 WHERE status IN ('PENDING','RETRYING');
 
+-- Dedicated Scheduled / Delayed Jobs Index
+CREATE INDEX IF NOT EXISTS idx_ordered_jobs_scheduled
+ON ordered_jobs (available_at ASC, chain_id, sequence)
+WHERE status IN ('PENDING', 'RETRYING');
+
 -- Chain lookup for eligibility & promotion
 CREATE INDEX IF NOT EXISTS idx_ordered_jobs_chain_seq
 ON ordered_jobs (chain_id, sequence);

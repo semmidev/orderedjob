@@ -41,6 +41,13 @@ BEGIN
     INCLUDE (id, chain_id, sequence, job_type, status, attempt, max_attempts, worker_id, lease_until, lease_generation, idempotency_key, tenant_id, trace_id);
 END;
 
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_ordered_jobs_scheduled')
+BEGIN
+    CREATE INDEX idx_ordered_jobs_scheduled 
+    ON ordered_jobs (available_at, status)
+    INCLUDE (id, chain_id, sequence, job_type);
+END;
+
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_ordered_jobs_chain_seq')
 BEGIN
     CREATE INDEX idx_ordered_jobs_chain_seq 

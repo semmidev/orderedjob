@@ -24,3 +24,7 @@ var WithOrderingMode = orderedjob.WithOrderingMode
 func RegisterTyped[T any](e *Engine, jobType string, fn func(ctx context.Context, job orderedjob.Job, payload T) error) {
 	orderedjob.RegisterTyped(e, jobType, fn)
 }
+
+func RegisterTypedWithValidator[T any](e *Engine, jobType string, fn func(ctx context.Context, job orderedjob.Job, payload T) error, validator orderedjob.PayloadValidatorFunc[T]) {
+	orderedjob.RegisterTypedWithValidator(e, jobType, fn, validator)
+}

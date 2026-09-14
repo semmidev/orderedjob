@@ -75,6 +75,12 @@
       </div>
 
       <div class="flex items-center space-x-4">
+        <!-- Live SSE Indicator -->
+        <div id="sseBadge" class="hidden items-center space-x-1.5 bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 text-[11px] px-2.5 py-1 rounded-full font-medium">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+          <span>LIVE SSE</span>
+        </div>
+
         <!-- Live Indicator -->
         <div class="flex items-center space-x-2 text-xs text-warm bg-canvas border border-border px-3 py-1.5 rounded-full">
           <span id="refreshPulse" class="w-2 h-2 rounded-full bg-cyan-signal animate-pulse"></span>
@@ -100,10 +106,14 @@
 
     <!-- Hero / Headline -->
     <!-- Stat Cards Grid -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4" id="statsGrid">
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4" id="statsGrid">
       <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
         <div class="text-xs text-warm font-medium">Pending</div>
         <div class="text-2xl font-bold text-ink" id="stat-pending">0</div>
+      </div>
+      <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
+        <div class="text-xs text-warm font-medium">Scheduled</div>
+        <div class="text-2xl font-bold text-indigo-600" id="stat-scheduled">0</div>
       </div>
       <div class="bg-card border border-border rounded-xl p-4 shadow-seline space-y-1">
         <div class="text-xs text-warm font-medium">Processing</div>
@@ -127,6 +137,7 @@
     <div class="flex items-center justify-between text-xs text-warm bg-card border border-border px-4 py-3 rounded-xl shadow-subtle">
       <div class="flex items-center space-x-6">
         <div>Total Jobs: <span class="font-semibold text-ink" id="stat-total">0</span></div>
+        <div>Scheduled Jobs: <span class="font-semibold text-ink" id="stat-scheduled-bar">0</span></div>
         <div>Blocked Jobs: <span class="font-semibold text-ink" id="stat-blocked">0</span></div>
         <div>Cancelled Jobs: <span class="font-semibold text-ink" id="stat-cancelled">0</span></div>
       </div>
@@ -146,14 +157,21 @@
     <!-- TAB 1: JOBS QUEUE -->
     <div id="view-jobs" class="space-y-4">
       <!-- Search & Filters -->
-      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-        <div class="flex-1 flex items-center space-x-3">
-          <input type="text" id="searchInput" oninput="debounceFetch()" placeholder="Search Job ID, Idempotency Key, or Trace ID..."
-                 class="w-full sm:max-w-md bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
+      <div class="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+        <div class="flex-1 flex flex-wrap items-center gap-2">
+          <input type="text" id="searchInput" oninput="debounceFetch()" placeholder="Search Job ID, Key..."
+                 class="w-full sm:w-60 bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
+
+          <input type="text" id="tenantFilterInput" oninput="debounceFetch()" placeholder="Filter Tenant..."
+                 class="w-28 sm:w-32 bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
+
+          <input type="text" id="traceFilterInput" oninput="debounceFetch()" placeholder="Filter Trace..."
+                 class="w-28 sm:w-32 bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
 
           <select id="statusFilter" onchange="fetchJobs(1)" class="bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-cyan-signal shadow-subtle">
             <option value="">All Statuses</option>
             <option value="PENDING">PENDING</option>
+            <option value="SCHEDULED">SCHEDULED (Delayed)</option>
             <option value="PROCESSING">PROCESSING</option>
             <option value="COMPLETED">COMPLETED</option>
             <option value="BLOCKED">BLOCKED</option>
@@ -323,6 +341,10 @@
             <span class="font-semibold text-ink" id="detailIdempotencyKey">-</span>
           </div>
           <div>
+            <span class="text-warm block">Tenant ID</span>
+            <span class="font-semibold text-ink" id="detailTenantID">-</span>
+          </div>
+          <div>
             <span class="text-warm block">Trace ID</span>
             <span class="font-semibold text-ink" id="detailTraceID">-</span>
           </div>
@@ -400,6 +422,76 @@
     </div>
   </div>
 
+  <!-- Reschedule Job Modal -->
+  <div id="rescheduleModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-md w-full p-6 shadow-preview space-y-4">
+      <div class="flex items-center justify-between border-b border-border pb-3">
+        <h3 class="font-bold text-ink text-sm">Reschedule Job</h3>
+        <button onclick="closeRescheduleModal()" class="text-warm hover:text-ink text-sm">✕</button>
+      </div>
+      <input type="hidden" id="rescheduleJobID" />
+      <div>
+        <label class="block text-xs font-semibold text-warm mb-1">New Execution Time (Available At)</label>
+        <input type="datetime-local" id="rescheduleTime" class="w-full bg-canvas border border-border rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-cyan-signal" />
+      </div>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button onclick="closeRescheduleModal()" class="px-4 py-2 bg-canvas hover:bg-border text-warm hover:text-ink rounded-lg text-xs font-medium">Cancel</button>
+        <button onclick="submitReschedule()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">Save Schedule</button>
+      </div>
+    </div>
+  <!-- Edit & Replay Payload Modal -->
+  <div id="editPayloadModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-xl w-full p-6 shadow-preview space-y-4">
+      <div class="flex items-center justify-between border-b border-border pb-3">
+        <div>
+          <h3 class="font-bold text-ink text-sm">Edit & Replay Job Payload</h3>
+          <span class="text-[11px] text-warm font-mono" id="editPayloadJobUUID"></span>
+        </div>
+        <button onclick="closeEditPayloadModal()" class="text-warm hover:text-ink text-sm">✕</button>
+      </div>
+      <input type="hidden" id="editPayloadJobID" />
+      <div class="space-y-2 text-xs">
+        <div class="flex items-center justify-between">
+          <label class="block font-semibold text-ink">Payload JSON</label>
+          <button onclick="formatEditPayloadJSON()" class="px-2.5 py-1 bg-canvas border border-border hover:bg-border rounded text-[11px] text-warm font-medium">✨ Format JSON</button>
+        </div>
+        <textarea id="editPayloadInput" rows="8" class="w-full bg-soot text-emerald-400 font-mono text-xs p-3 rounded-xl border border-border focus:outline-none focus:border-cyan-signal"></textarea>
+      </div>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button onclick="closeEditPayloadModal()" class="px-4 py-2 bg-canvas hover:bg-border text-warm hover:text-ink rounded-lg text-xs font-medium">Cancel</button>
+        <button onclick="submitEditPayloadReplay()" class="px-4 py-2 bg-cyan-signal hover:bg-cyan-edge text-white rounded-lg text-xs font-medium">Save & Replay Job</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chain Dependency Graph Viewer Modal -->
+  <div id="chainGraphModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-4xl w-full p-6 shadow-preview space-y-4 max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-border pb-3 shrink-0">
+        <div>
+          <h3 class="font-bold text-ink text-base">Chain Sequence Graph Viewer</h3>
+          <span class="text-xs text-cyan-edge font-medium" id="chainGraphTitle">Chain: -</span>
+        </div>
+        <button onclick="closeChainGraphModal()" class="text-warm hover:text-ink text-lg">✕</button>
+      </div>
+
+      <!-- Graph Canvas Container -->
+      <div class="flex-1 overflow-x-auto py-6 px-4 bg-canvas border border-border rounded-xl flex items-center min-h-[220px]" id="chainGraphContainer">
+        <div class="text-warm text-xs text-center w-full">Loading chain sequence graph...</div>
+      </div>
+
+      <div class="flex justify-between items-center text-xs text-warm pt-2 shrink-0 border-t border-border">
+        <div class="flex items-center space-x-4">
+          <span class="flex items-center space-x-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span>COMPLETED</span></span>
+          <span class="flex items-center space-x-1.5"><span class="w-2.5 h-2.5 rounded-full bg-cyan-500"></span><span>PROCESSING</span></span>
+          <span class="flex items-center space-x-1.5"><span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span><span>PENDING</span></span>
+          <span class="flex items-center space-x-1.5"><span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span><span>FAILED / DLQ</span></span>
+        </div>
+        <button onclick="closeChainGraphModal()" class="px-4 py-2 bg-canvas hover:bg-border text-ink rounded-lg font-medium">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let currentPage = 1;
     let currentLimit = 20;
@@ -417,9 +509,45 @@
 
     const rootAPI = window.CONFIG.rootPath + '/api';
 
+    let sseSource = null;
+
     function init() {
       fetchData();
       changeRefreshRate(5000);
+      initSSE();
+    }
+
+    function initSSE() {
+      if (sseSource) sseSource.close();
+      if (typeof EventSource !== 'undefined') {
+        sseSource = new EventSource(rootAPI + '/events');
+        const badge = document.getElementById('sseBadge');
+        sseSource.addEventListener('stats', function(e) {
+          if (badge) badge.classList.remove('hidden');
+          try {
+            const data = JSON.parse(e.data);
+            updateStatsUI(data);
+          } catch(err) { console.error('SSE parse error:', err); }
+        });
+        sseSource.onerror = function() {
+          if (badge) badge.classList.add('hidden');
+        };
+      }
+    }
+
+    function updateStatsUI(data) {
+      if (!data) return;
+      document.getElementById('stat-pending').innerText = data.pending || 0;
+      document.getElementById('stat-scheduled').innerText = data.scheduled || 0;
+      document.getElementById('stat-scheduled-bar').innerText = data.scheduled || 0;
+      document.getElementById('stat-processing').innerText = data.processing || 0;
+      document.getElementById('stat-completed').innerText = data.completed || 0;
+      document.getElementById('stat-retrying').innerText = data.retrying || 0;
+      document.getElementById('stat-failed').innerText = (data.failed || 0) + (data.dead_lettered || 0);
+      document.getElementById('stat-total').innerText = data.total || 0;
+      document.getElementById('stat-blocked').innerText = data.blocked || 0;
+      document.getElementById('stat-cancelled').innerText = data.cancelled || 0;
+      document.getElementById('stat-active-chains').innerText = data.active_chains || 0;
     }
 
     function changeRefreshRate(ms) {
@@ -499,17 +627,7 @@
     function fetchStats() {
       fetch(rootAPI + '/stats')
         .then(res => res.json())
-        .then(data => {
-          document.getElementById('stat-pending').innerText = data.pending || 0;
-          document.getElementById('stat-processing').innerText = data.processing || 0;
-          document.getElementById('stat-completed').innerText = data.completed || 0;
-          document.getElementById('stat-retrying').innerText = data.retrying || 0;
-          document.getElementById('stat-failed').innerText = (data.failed || 0) + (data.dead_lettered || 0);
-          document.getElementById('stat-total').innerText = data.total || 0;
-          document.getElementById('stat-blocked').innerText = data.blocked || 0;
-          document.getElementById('stat-cancelled').innerText = data.cancelled || 0;
-          document.getElementById('stat-active-chains').innerText = data.active_chains || 0;
-        })
+        .then(data => updateStatsUI(data))
         .catch(err => console.error('Error fetching stats:', err));
     }
 
@@ -526,6 +644,10 @@
       const status = document.getElementById('statusFilter').value;
       const chainInput = document.getElementById('chainFilterInput');
       const chain = chainInput ? chainInput.value.trim() : '';
+      const tenantInput = document.getElementById('tenantFilterInput');
+      const tenant = tenantInput ? tenantInput.value.trim() : '';
+      const traceInput = document.getElementById('traceFilterInput');
+      const trace = traceInput ? traceInput.value.trim() : '';
       const search = document.getElementById('searchInput').value;
 
       const params = new URLSearchParams({
@@ -533,6 +655,8 @@
         limit: currentLimit,
         status: status,
         chain_id: chain,
+        tenant_id: tenant,
+        trace_id: trace,
         search: search,
         order_by: jobOrderBy,
         order_dir: jobOrderDir
@@ -561,7 +685,11 @@
           </td>
           <td class="py-3 px-4">
             <div class="font-semibold text-ink">${j.chain_id}</div>
-            <div class="text-[11px] text-warm">Seq: ${j.sequence}</div>
+            <div class="text-[11px] text-warm flex items-center space-x-1.5 mt-0.5">
+              <span>Seq: ${j.sequence}</span>
+              ${j.tenant_id ? `<span class="bg-purple-100 text-purple-700 px-1.5 py-0.2 rounded text-[10px] font-medium" title="Tenant ID">T:${j.tenant_id}</span>` : ''}
+              ${j.trace_id ? `<span class="bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded text-[10px] font-medium" title="Trace ID">Tr:${j.trace_id.substring(0, 8)}...</span>` : ''}
+            </div>
           </td>
           <td class="py-3 px-4 font-mono text-warm">${j.type || j.job_type || '-'}</td>
           <td class="py-3 px-4">${getStatusBadge(j.status)}</td>
@@ -578,8 +706,13 @@
     function renderQuickActions(j) {
       if (window.CONFIG.readOnly) return '';
       let btns = '';
+      if (['PENDING', 'RETRYING'].includes(j.status)) {
+        btns += `<button onclick="openRescheduleModal('${j.id}', '${j.available_at || ''}')" class="px-2.5 py-1 bg-indigo-600 text-white rounded-md text-[11px] hover:bg-indigo-700">Reschedule</button>`;
+      }
       if (['FAILED', 'DEAD_LETTERED', 'CANCELLED'].includes(j.status)) {
         btns += `<button onclick="actionJob('${j.id}', 'replay')" class="px-2.5 py-1 bg-cyan-signal text-white rounded-md text-[11px] hover:bg-cyan-edge">Replay</button>`;
+        let rawPayload = JSON.stringify(j.payload || {});
+        btns += `<button onclick="openEditPayloadModal('${j.id}', '${escapeAttr(rawPayload)}')" class="px-2.5 py-1 bg-indigo-500 text-white rounded-md text-[11px] hover:bg-indigo-600">Edit & Replay</button>`;
       }
       if (['FAILED', 'DEAD_LETTERED', 'CANCELLED', 'BLOCKED'].includes(j.status)) {
         btns += `<button onclick="actionJob('${j.id}', 'skip')" class="px-2.5 py-1 bg-amber-500 text-white rounded-md text-[11px] hover:bg-amber-600">Skip</button>`;
@@ -640,7 +773,10 @@
           <td class="py-3 px-4 text-ink">${c.max_sequence}</td>
           <td class="py-3 px-4 text-cyan-signal font-medium">${c.pending_jobs}</td>
           <td class="py-3 px-4 text-rose-600 font-medium">${c.failed_jobs}</td>
-          <td class="py-3 px-4">${getStatusBadge(c.latest_status)}</td>
+          <td class="py-3 px-4 flex items-center justify-between">
+            ${getStatusBadge(c.latest_status)}
+            <button onclick="openChainGraphModal('${c.chain_id}')" class="px-2.5 py-1 bg-canvas hover:bg-border text-cyan-edge rounded-md text-[11px] font-medium border border-border ml-2">📊 Graph</button>
+          </td>
         </tr>
       `).join('');
     }
@@ -725,6 +861,7 @@
     function getStatusBadge(status) {
       const map = {
         'PENDING': 'bg-sky-100 text-sky-800 border-sky-200',
+        'SCHEDULED': 'bg-indigo-100 text-indigo-800 border-indigo-200',
         'PROCESSING': 'bg-blue-100 text-blue-800 border-blue-200',
         'COMPLETED': 'bg-emerald-100 text-emerald-800 border-emerald-200',
         'BLOCKED': 'bg-stone-200 text-stone-700 border-stone-300',
@@ -778,6 +915,7 @@
           document.getElementById('detailAttempt').innerText = `${j.attempt} / ${j.max_attempts}`;
           document.getElementById('detailWorkerID').innerText = j.worker_id || 'None';
           document.getElementById('detailIdempotencyKey').innerText = j.idempotency_key || 'None';
+          document.getElementById('detailTenantID').innerText = j.tenant_id || 'None';
           document.getElementById('detailTraceID').innerText = j.trace_id || 'None';
 
           if (j.last_error) {
@@ -885,10 +1023,178 @@
       .catch(err => alert('Enqueue failed: ' + err));
     }
 
+    function openRescheduleModal(id, availableAt) {
+      document.getElementById('rescheduleJobID').value = id;
+      const input = document.getElementById('rescheduleTime');
+      if (availableAt) {
+        try {
+          const d = new Date(availableAt);
+          const iso = new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+          input.value = iso;
+        } catch(e) {
+          input.value = '';
+        }
+      } else {
+        input.value = '';
+      }
+      document.getElementById('rescheduleModal').classList.remove('hidden');
+    }
+
+    function closeRescheduleModal() {
+      document.getElementById('rescheduleModal').classList.add('hidden');
+    }
+
+    function submitReschedule() {
+      const id = document.getElementById('rescheduleJobID').value;
+      const val = document.getElementById('rescheduleTime').value;
+      if (!id || !val) {
+        alert('Valid execution time is required');
+        return;
+      }
+      const dt = new Date(val).toISOString();
+      fetch(rootAPI + `/jobs/${id}/reschedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available_at: dt })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert('Reschedule failed: ' + data.error);
+        } else {
+          closeRescheduleModal();
+          closeDetailModal();
+          fetchData();
+        }
+      })
+      .catch(err => alert('Reschedule failed: ' + err));
+    }
+
     function formatDate(dtStr) {
       if (!dtStr) return '-';
       const d = new Date(dtStr);
       return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+    }
+
+    function escapeAttr(str) {
+      return (str || '').replace(/'/g, "&apos;").replace(/"/g, "&quot;");
+    }
+
+    function openEditPayloadModal(id, rawPayload) {
+      document.getElementById('editPayloadJobID').value = id;
+      document.getElementById('editPayloadJobUUID').innerText = id;
+      let formatted = rawPayload;
+      try {
+        const parsed = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+        formatted = JSON.stringify(parsed, null, 2);
+      } catch(e){}
+      document.getElementById('editPayloadInput').value = formatted;
+      document.getElementById('editPayloadModal').classList.remove('hidden');
+    }
+
+    function closeEditPayloadModal() {
+      document.getElementById('editPayloadModal').classList.add('hidden');
+    }
+
+    function formatEditPayloadJSON() {
+      const input = document.getElementById('editPayloadInput');
+      try {
+        const parsed = JSON.parse(input.value);
+        input.value = JSON.stringify(parsed, null, 2);
+      } catch(e) {
+        alert('Invalid JSON: ' + e.message);
+      }
+    }
+
+    function submitEditPayloadReplay() {
+      const id = document.getElementById('editPayloadJobID').value;
+      const val = document.getElementById('editPayloadInput').value;
+      let payload = {};
+      try {
+        payload = JSON.parse(val);
+      } catch(e) {
+        alert('Invalid JSON Payload: ' + e.message);
+        return;
+      }
+
+      fetch(rootAPI + `/jobs/${id}/replay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload: payload })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert('Replay failed: ' + data.error);
+        } else {
+          closeEditPayloadModal();
+          closeDetailModal();
+          fetchData();
+        }
+      })
+      .catch(err => alert('Replay failed: ' + err));
+    }
+
+    function openChainGraphModal(chainId) {
+      document.getElementById('chainGraphTitle').innerText = 'Chain: ' + chainId;
+      const container = document.getElementById('chainGraphContainer');
+      container.innerHTML = '<div class="text-warm text-xs text-center w-full">Loading sequence graph...</div>';
+      document.getElementById('chainGraphModal').classList.remove('hidden');
+
+      fetch(rootAPI + `/jobs?chain_id=${encodeURIComponent(chainId)}&limit=100&order_by=sequence&order_dir=asc`)
+        .then(res => res.json())
+        .then(data => {
+          renderChainGraph(data.jobs || []);
+        })
+        .catch(err => {
+          container.innerHTML = `<div class="text-rose-500 text-xs text-center w-full">Failed to load graph: ${err}</div>`;
+        });
+    }
+
+    function closeChainGraphModal() {
+      document.getElementById('chainGraphModal').classList.add('hidden');
+    }
+
+    function renderChainGraph(jobs) {
+      const container = document.getElementById('chainGraphContainer');
+      if (!jobs || jobs.length === 0) {
+        container.innerHTML = '<div class="text-warm text-xs text-center w-full">No jobs found in this chain</div>';
+        return;
+      }
+
+      let html = '<div class="flex items-center space-x-4 min-w-max px-2 py-4">';
+      jobs.forEach((j, idx) => {
+        let nodeBg = 'bg-sky-500/10 border-sky-400 text-sky-700';
+        if (j.status === 'COMPLETED') nodeBg = 'bg-emerald-500/10 border-emerald-500 text-emerald-700';
+        if (j.status === 'PROCESSING') nodeBg = 'bg-cyan-500/10 border-cyan-500 text-cyan-700 animate-pulse';
+        if (['FAILED', 'DEAD_LETTERED'].includes(j.status)) nodeBg = 'bg-rose-500/10 border-rose-500 text-rose-700';
+        if (['BLOCKED', 'CANCELLED'].includes(j.status)) nodeBg = 'bg-stone-200 border-stone-400 text-stone-700';
+
+        html += `
+          <div onclick="viewJobDetail('${j.id}')" class="cursor-pointer border rounded-xl p-3 bg-card shadow-subtle hover:shadow-preview transition-all w-48 space-y-2 shrink-0 ${nodeBg}">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-xs">Seq #${j.sequence}</span>
+              ${getStatusBadge(j.status)}
+            </div>
+            <div class="font-semibold text-xs text-ink truncate">${j.type || j.job_type}</div>
+            <div class="text-[10px] text-warm flex justify-between">
+              <span>Attempt: ${j.attempt}/${j.max_attempts}</span>
+              <span class="font-mono text-[9px]">${j.id.substring(0, 6)}...</span>
+            </div>
+            ${j.last_error ? `<div class="text-[10px] text-rose-600 font-mono truncate" title="${escapeAttr(j.last_error)}">⚠️ ${j.last_error}</div>` : ''}
+          </div>
+        `;
+
+        if (idx < jobs.length - 1) {
+          html += `
+            <div class="flex items-center text-warm font-bold text-sm shrink-0">
+              ➔
+            </div>
+          `;
+        }
+      });
+      html += '</div>';
+      container.innerHTML = html;
     }
 
     window.onload = init;

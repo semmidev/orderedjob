@@ -3,11 +3,13 @@ package ui
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/semmidev/orderedjob"
@@ -90,6 +92,7 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 	mux.HandleFunc("/api/chains", s.handleChains)
 	mux.HandleFunc("/api/enqueue", s.handleEnqueue)
 	mux.HandleFunc("/api/job-types", s.handleJobTypes)
+	mux.HandleFunc("/api/events", s.handleSSEEvents)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -127,6 +130,44 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 	})
 }
 
+func (s *Server) handleSSEEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	stats, err := s.repo.GetStats(r.Context())
+	if err == nil {
+		b, _ := json.Marshal(stats)
+		_, _ = fmt.Fprintf(w, "event: stats\ndata: %s\n\n", string(b))
+		flusher.Flush()
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			stats, err := s.repo.GetStats(r.Context())
+			if err != nil {
+				continue
+			}
+			b, _ := json.Marshal(stats)
+			_, _ = fmt.Fprintf(w, "event: stats\ndata: %s\n\n", string(b))
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *Server) handleJobTypes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -161,6 +202,8 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	chainID := q.Get("chain_id")
 	status := q.Get("status")
 	jobType := q.Get("job_type")
+	tenantID := q.Get("tenant_id")
+	traceID := q.Get("trace_id")
 	search := q.Get("search")
 	orderBy := q.Get("order_by")
 	orderDir := q.Get("order_dir")
@@ -174,15 +217,23 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 
+	scheduledOnly := q.Get("scheduled_only") == "true" || status == "SCHEDULED"
+	if status == "SCHEDULED" {
+		status = ""
+	}
+
 	filter := orderedjob.JobFilter{
-		ChainID:  chainID,
-		Status:   status,
-		JobType:  jobType,
-		Search:   search,
-		OrderBy:  orderBy,
-		OrderDir: orderDir,
-		Offset:   (page - 1) * limit,
-		Limit:    limit,
+		ChainID:       chainID,
+		Status:        status,
+		JobType:       jobType,
+		TenantID:      tenantID,
+		TraceID:       traceID,
+		Search:        search,
+		OrderBy:       orderBy,
+		OrderDir:      orderDir,
+		Offset:        (page - 1) * limit,
+		Limit:         limit,
+		ScheduledOnly: scheduledOnly,
 	}
 
 	jobs, total, err := s.repo.ListJobs(r.Context(), filter)
@@ -247,11 +298,33 @@ func (s *Server) handleJobDetailOrAction(w http.ResponseWriter, r *http.Request)
 	action := parts[1]
 	switch action {
 	case "replay":
-		err = s.repo.ReplayJob(r.Context(), id)
+		var body struct {
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) == nil && len(body.Payload) > 0 {
+			err = s.repo.ReplayJobWithPayload(r.Context(), id, body.Payload)
+		} else {
+			err = s.repo.ReplayJob(r.Context(), id)
+		}
 	case "skip":
 		err = s.repo.SkipJob(r.Context(), id)
 	case "cancel":
 		err = s.repo.RequestCancel(r.Context(), id)
+	case "reschedule":
+		var body struct {
+			AvailableAt time.Time `json:"available_at"`
+		}
+		if decodeErr := json.NewDecoder(r.Body).Decode(&body); decodeErr != nil || body.AvailableAt.IsZero() {
+			respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or missing available_at timestamp"})
+			return
+		}
+		job, rescheduleErr := s.repo.RescheduleJob(r.Context(), id, body.AvailableAt)
+		if rescheduleErr != nil {
+			respondJSON(w, http.StatusInternalServerError, map[string]string{"error": rescheduleErr.Error()})
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"success": true, "id": id, "action": action, "job": job})
+		return
 	default:
 		http.Error(w, "Unknown Action", http.StatusBadRequest)
 		return

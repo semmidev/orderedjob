@@ -478,3 +478,381 @@ func TestEngine_OrderingStrategyResolver(t *testing.T) {
 	j2Fetched, _ := eng.Get(ctx, j2.ID)
 	assert.Equal(t, "COMPLETED", j2Fetched.Status)
 }
+
+func TestEngine_ScheduledAndDelayedJobs(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(2),
+		orderedjob.WithPollInterval(20*time.Millisecond),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	executed := make(chan string, 10)
+	eng.RegisterFunc("ScheduledType", func(ctx context.Context, job orderedjob.Job) error {
+		executed <- job.ChainID
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	// 1. Enqueue a job delayed by 200ms
+	futureTime := time.Now().Add(200 * time.Millisecond)
+	j1, err := eng.Schedule(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "c-scheduled-1",
+		Sequence: 1,
+		Type:     "ScheduledType",
+	}, futureTime)
+	require.NoError(t, err)
+	assert.True(t, j1.AvailableAt.After(time.Now().Add(100*time.Millisecond)))
+
+	// 2. Enqueue via EnqueueDelayed helper (300ms)
+	j2, err := eng.EnqueueDelayed(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "c-scheduled-2",
+		Sequence: 1,
+		Type:     "ScheduledType",
+	}, 300*time.Millisecond)
+	require.NoError(t, err)
+	assert.True(t, j2.AvailableAt.After(time.Now().Add(200*time.Millisecond)))
+
+	// Verify stats count scheduled jobs correctly
+	stats, err := repo.GetStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), stats.Scheduled)
+
+	// Verify ListJobs with ScheduledOnly filter
+	scheduledJobs, total, err := repo.ListJobs(ctx, orderedjob.JobFilter{ScheduledOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	assert.Len(t, scheduledJobs, 2)
+
+	// Ensure job isn't executed immediately
+	select {
+	case id := <-executed:
+		t.Fatalf("Job executed prematurely before available_at: %s", id)
+	case <-time.After(50 * time.Millisecond):
+		// Expected: not executed yet
+	}
+
+	// Wait for delayed jobs to execute
+	time.Sleep(350 * time.Millisecond)
+
+	select {
+	case <-executed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Scheduled job 1 did not execute after available_at")
+	}
+
+	select {
+	case <-executed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Delayed job 2 did not execute after available_at")
+	}
+}
+
+func TestEngine_RescheduleJob(t *testing.T) {
+	repo := memory.New()
+	eng := orderedjob.New(repo,
+		orderedjob.WithConcurrency(1),
+		orderedjob.WithPollInterval(20*time.Millisecond),
+		orderedjob.WithLogger(orderedjob.NoopLogger{}),
+	)
+
+	executed := make(chan struct{}, 1)
+	eng.RegisterFunc("RescheduledJob", func(ctx context.Context, job orderedjob.Job) error {
+		executed <- struct{}{}
+		return nil
+	})
+
+	ctx := context.Background()
+	require.NoError(t, eng.Start(ctx))
+	defer func() { _ = eng.Shutdown(ctx) }()
+
+	// Enqueue far in future (1 hour)
+	farFuture := time.Now().Add(1 * time.Hour)
+	j, err := eng.Schedule(ctx, orderedjob.EnqueueRequest{
+		ChainID:  "c-resched",
+		Sequence: 1,
+		Type:     "RescheduledJob",
+	}, farFuture)
+	require.NoError(t, err)
+
+	// Reschedule to run soon (50ms from now)
+	nearFuture := time.Now().Add(50 * time.Millisecond)
+	updatedJob, err := eng.RescheduleJob(ctx, j.ID, nearFuture)
+	require.NoError(t, err)
+	assert.WithinDuration(t, nearFuture, updatedJob.AvailableAt, 10*time.Millisecond)
+
+	// Wait for execution
+	select {
+	case <-executed:
+		// Success!
+	case <-time.After(2 * time.Second):
+		t.Fatal("Rescheduled job was not claimed/executed in time")
+	}
+}
+
+func TestEngine_WorkerPanicRecoveryGuard(t *testing.T) {
+	t.Run("Default panic isolation marks job FAILED and keeps worker pool alive", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithOrderingMode(orderedjob.OrderingModeSkipOnFailure),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		job2Executed := make(chan struct{}, 1)
+
+		eng.RegisterFunc("PanickingJob", func(ctx context.Context, job orderedjob.Job) error {
+			panic("simulated unhandled runtime panic in handler")
+		})
+		eng.RegisterFunc("NextHealthyJob", func(ctx context.Context, job orderedjob.Job) error {
+			job2Executed <- struct{}{}
+			return nil
+		})
+
+		ctx := context.Background()
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		j1, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-panic", Sequence: 1, Type: "PanickingJob"})
+		require.NoError(t, err)
+
+		j2, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-panic", Sequence: 2, Type: "NextHealthyJob"})
+		require.NoError(t, err)
+
+		// Wait for job2 to be executed despite job1 panicking
+		select {
+		case <-job2Executed:
+			// Success - worker pool survived the panic!
+		case <-time.After(2 * time.Second):
+			t.Fatal("Worker pool crashed or stopped processing after handler panic")
+		}
+
+		j1Fetched, _ := eng.Get(ctx, j1.ID)
+		j2Fetched, _ := eng.Get(ctx, j2.ID)
+
+		assert.Equal(t, "FAILED", j1Fetched.Status)
+		assert.Contains(t, j1Fetched.LastError, "panic: simulated unhandled runtime panic")
+		assert.Contains(t, j1Fetched.LastError, "stacktrace:")
+		assert.Equal(t, "COMPLETED", j2Fetched.Status)
+	})
+
+	t.Run("Custom PanicHandler interceptor", func(t *testing.T) {
+		repo := memory.New()
+		var interceptedPanic any
+
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithPanicHandler(func(ctx context.Context, job orderedjob.Job, panicVal any, stack []byte) error {
+				interceptedPanic = panicVal
+				return orderedjob.NonRetryable(fmt.Errorf("custom panic handling: %v", panicVal))
+			}),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		eng.RegisterFunc("PanickingJob", func(ctx context.Context, job orderedjob.Job) error {
+			panic("custom panic payload")
+		})
+
+		ctx := context.Background()
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		j, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-panic-custom", Sequence: 1, Type: "PanickingJob"})
+		require.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Equal(t, "custom panic payload", interceptedPanic)
+
+		jFetched, _ := eng.Get(ctx, j.ID)
+		assert.Equal(t, "FAILED", jFetched.Status)
+		assert.Contains(t, jFetched.LastError, "custom panic handling: custom panic payload")
+	})
+
+	t.Run("WithRetryOnPanic enables retry behavior", func(t *testing.T) {
+		repo := memory.New()
+		var attempts int
+
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithRetryOnPanic(true),
+			orderedjob.WithRetryPolicy(retry.Policy{
+				MaxAttempts: 3,
+				BaseDelay:   10 * time.Millisecond,
+				MaxDelay:    50 * time.Millisecond,
+			}),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		eng.RegisterFunc("FlakyPanicJob", func(ctx context.Context, job orderedjob.Job) error {
+			attempts++
+			if attempts < 2 {
+				panic("transient panic")
+			}
+			return nil
+		})
+
+		ctx := context.Background()
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		j, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{ChainID: "c-panic-retry", Sequence: 1, Type: "FlakyPanicJob"})
+		require.NoError(t, err)
+
+		time.Sleep(200 * time.Millisecond)
+
+		jFetched, _ := eng.Get(ctx, j.ID)
+		assert.Equal(t, "COMPLETED", jFetched.Status)
+		assert.Equal(t, 2, attempts)
+	})
+}
+
+type ValidatablePayload struct {
+	Age  int    `json:"age"`
+	Name string `json:"name"`
+}
+
+func (v ValidatablePayload) Validate() error {
+	if v.Age < 18 {
+		return fmt.Errorf("age must be at least 18")
+	}
+	if v.Name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	return nil
+}
+
+type ValidatableCtxPayload struct {
+	Role string `json:"role"`
+}
+
+func (v ValidatableCtxPayload) ValidateCtx(ctx context.Context) error {
+	if v.Role != "admin" {
+		return fmt.Errorf("role must be admin")
+	}
+	return nil
+}
+
+func TestEngine_TypedHandlerValidation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Self-validation via Validator interface failure", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		var handled bool
+		orderedjob.RegisterTyped(eng, "UserJob", func(ctx context.Context, job orderedjob.Job, payload ValidatablePayload) error {
+			handled = true
+			return nil
+		})
+
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		// Invalid payload (age < 18)
+		j, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-val-1",
+			Sequence: 1,
+			Type:     "UserJob",
+			Payload:  ValidatablePayload{Age: 16, Name: "John"},
+		})
+		require.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond)
+
+		jFetched, err := eng.Get(ctx, j.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "FAILED", jFetched.Status)
+		assert.False(t, handled)
+		assert.Contains(t, jFetched.LastError, "payload validation failed")
+		assert.Contains(t, jFetched.LastError, "age must be at least 18")
+	})
+
+	t.Run("Self-validation via ValidatorCtx interface success and failure", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		var handled bool
+		orderedjob.RegisterTyped(eng, "AdminJob", func(ctx context.Context, job orderedjob.Job, payload ValidatableCtxPayload) error {
+			handled = true
+			return nil
+		})
+
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		// Invalid role
+		j, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-val-2",
+			Sequence: 1,
+			Type:     "AdminJob",
+			Payload:  ValidatableCtxPayload{Role: "user"},
+		})
+		require.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond)
+
+		jFetched, err := eng.Get(ctx, j.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "FAILED", jFetched.Status)
+		assert.False(t, handled)
+		assert.Contains(t, jFetched.LastError, "role must be admin")
+	})
+
+	t.Run("Custom validator function via RegisterTypedWithValidator", func(t *testing.T) {
+		repo := memory.New()
+		eng := orderedjob.New(repo,
+			orderedjob.WithConcurrency(1),
+			orderedjob.WithPollInterval(10*time.Millisecond),
+			orderedjob.WithLogger(orderedjob.NoopLogger{}),
+		)
+
+		var handled bool
+		orderedjob.RegisterTypedWithValidator(eng, "CustomValJob",
+			func(ctx context.Context, job orderedjob.Job, payload map[string]int) error {
+				handled = true
+				return nil
+			},
+			func(ctx context.Context, payload map[string]int) error {
+				if payload["amount"] <= 0 {
+					return fmt.Errorf("amount must be positive")
+				}
+				return nil
+			},
+		)
+
+		require.NoError(t, eng.Start(ctx))
+		defer func() { _ = eng.Shutdown(ctx) }()
+
+		// Invalid amount <= 0
+		j, err := eng.Enqueue(ctx, orderedjob.EnqueueRequest{
+			ChainID:  "chain-val-3",
+			Sequence: 1,
+			Type:     "CustomValJob",
+			Payload:  map[string]int{"amount": -50},
+		})
+		require.NoError(t, err)
+
+		time.Sleep(100 * time.Millisecond)
+
+		jFetched, err := eng.Get(ctx, j.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "FAILED", jFetched.Status)
+		assert.False(t, handled)
+		assert.Contains(t, jFetched.LastError, "amount must be positive")
+	})
+}
