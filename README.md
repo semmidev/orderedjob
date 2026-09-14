@@ -39,7 +39,7 @@
 ## 📦 Instalasi
 
 ```bash
-go get github.com/semmidev/orderedjob
+go get github.com/semmidev/orderedjob@latest
 ```
 
 ---
