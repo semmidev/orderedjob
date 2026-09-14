@@ -507,6 +507,7 @@ Dashboard Web UI bawaan (`ui/`) dibangun dengan arsitektur modern tanpa dependen
 -  **Search & Detail Modal**: Pencarian job berdasarkan `trace_id`, `chain_id`, `tenant_id`, atau `status`.
 -  **Payload Inspector & Editor**: Tampilan JSON payload terformat dengan sintaks yang rapi serta modal perbaikan payload secara interaktif.
 -  **Filtering & Sorting**: Fitur pagination, penataan kolom, dan status filter antrean.
+-  **Auth Protection & Security**: Dukungan bawaan untuk HTTP Basic Auth (`WithBasicAuth`), Bearer Token (`WithTokenAuth`), HS256 JWT Token (`WithJWTAuth`), serta custom HTTP middleware (`WithAuthMiddleware`).
 
 ---
 

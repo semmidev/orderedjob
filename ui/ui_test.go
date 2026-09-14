@@ -317,3 +317,108 @@ func TestUIHandler_Endpoints(t *testing.T) {
 		assert.ErrorIs(t, err, orderedjob.ErrNotFound)
 	})
 }
+
+func TestUIHandler_Authentication(t *testing.T) {
+	repo := memory.New()
+
+	t.Run("Basic Auth", func(t *testing.T) {
+		h := ui.New(repo, ui.WithBasicAuth("admin", "secret123"))
+
+		// No credentials
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		assert.Equal(t, `Basic realm="OrderedJob Dashboard"`, rec.Header().Get("WWW-Authenticate"))
+
+		// Invalid credentials
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.SetBasicAuth("admin", "wrongpass")
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+		// Valid credentials
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.SetBasicAuth("admin", "secret123")
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("Token Auth", func(t *testing.T) {
+		h := ui.New(repo, ui.WithTokenAuth("my-secret-token"))
+
+		// Unauthorized request
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+		// Header Bearer Token
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.Header.Set("Authorization", "Bearer my-secret-token")
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Query parameter token (for SSE/EventSource support)
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats?token=my-secret-token", nil)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("JWT Auth", func(t *testing.T) {
+		secret := "my-jwt-secret-key-123"
+		h := ui.New(repo, ui.WithJWTAuth(secret))
+
+		token, err := ui.GenerateHS256JWT(secret, map[string]any{"sub": "admin"}, 10*time.Minute)
+		require.NoError(t, err)
+
+		// Unauthorized
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+		// Valid JWT Token in Header
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Expired JWT Token
+		expiredToken, err := ui.GenerateHS256JWT(secret, map[string]any{"sub": "admin"}, -1*time.Minute)
+		require.NoError(t, err)
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.Header.Set("Authorization", "Bearer "+expiredToken)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("JWT Validator & AuthFunc", func(t *testing.T) {
+		h := ui.New(repo, ui.WithJWTValidator(func(tokenStr string) bool {
+			return tokenStr == "custom-valid-jwt"
+		}))
+
+		req := httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.Header.Set("Authorization", "Bearer custom-valid-jwt")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// Custom AuthFunc
+		hFunc := ui.New(repo, ui.WithAuthFunc(func(r *http.Request) bool {
+			return r.Header.Get("X-Custom-Auth") == "allowed"
+		}))
+
+		req = httptest.NewRequest(http.MethodGet, "/ui/api/stats", nil)
+		req.Header.Set("X-Custom-Auth", "allowed")
+		rec = httptest.NewRecorder()
+		hFunc.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+}

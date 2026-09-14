@@ -827,12 +827,17 @@ func main() {
 ### Fungsi Utama
 Mengintegrasikan dashboard antarmuka web interaktif (`/ui`) ke dalam server HTTP Go milik Anda dengan pembaruan grafik dan statistik real-time berbasis **Server-Sent Events (SSE)**.
 
-### Endpoint UI & Options
--  `ui.New(eng)`: Menginstansiasi HTTP handler dashboard Web UI.
--  `ui.WithPrefix("/admin/queue")`: Mengubah prefix path URL rute Web UI.
--  Endpoint `/ui/events`: Stream SSE real-time.
+### Endpoint UI, Options & Security Middleware
+-  `ui.New(repo, opts...)` / `ui.NewHandler(repo, opts...)`: Menginstansiasi HTTP handler dashboard Web UI.
+-  `ui.WithRootPath("/ui")`: Mengatur root path URL rute Web UI.
+-  `ui.WithReadOnly(true)`: Mengaktifkan mode *read-only* (mencegah aksi replay/skip/purge/enqueue).
+-  `ui.WithBasicAuth(user, pass)`: Mengamankan dashboard dengan HTTP Basic Authentication.
+-  `ui.WithTokenAuth(token)`: Mengamankan dashboard dengan Secret Bearer Token (`Authorization: Bearer <token>` atau `?token=<token>`).
+-  `ui.WithJWTAuth(secretKey)`: Mengamankan dashboard dengan verifikasi tanda tangan HS256 JWT Token & klaim *exp*.
+-  `ui.WithJWTValidator(fn)` / `ui.WithAuthFunc(fn)`: Mengamankan dashboard dengan validator kustom token atau evaluator `*http.Request`.
+-  `ui.WithAuthMiddleware(mw)`: Membungkus handler UI dengan middleware HTTP standar (`func(http.Handler) http.Handler`).
 
-### Contoh Kode Go
+### Contoh Kode Go (dengan Basic Auth / JWT Auth)
 
 ```go
 package main
@@ -854,13 +859,16 @@ func main() {
 	_ = eng.Start(ctx)
 	defer eng.Shutdown(ctx)
 
-	// Inisialisasi Router Web UI Dashboard
-	uiHandler := ui.New(eng, ui.WithPrefix("/ui"))
+	// Inisialisasi Router Web UI Dashboard dengan Auth Protection
+	uiHandler := ui.NewHandler(repo,
+		ui.WithRootPath("/ui"),
+		ui.WithBasicAuth("admin", "secret123"), // atau ui.WithJWTAuth("my-secret-key")
+	)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ui/", uiHandler)
 
-	fmt.Println(" Web UI Dashboard berjalan di http://localhost:8080/ui/")
+	fmt.Println("Web UI Dashboard berjalan di http://localhost:8080/ui/")
 	_ = http.ListenAndServe(":8080", mux)
 }
 ```

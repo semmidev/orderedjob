@@ -29,6 +29,7 @@ type Options struct {
 	Title            string
 	ReadOnly         bool
 	JobTypesProvider JobTypesProvider
+	AuthMiddleware   func(http.Handler) http.Handler
 }
 
 type Option func(*Options)
@@ -54,6 +55,12 @@ func WithJobTypesProvider(p JobTypesProvider) Option {
 type Server struct {
 	repo orderedjob.Repository
 	opts Options
+}
+
+// New creates a standalone http.Handler serving the monitoring dashboard and REST APIs.
+// It is a convenient alias for NewHandler.
+func New(repo orderedjob.Repository, opts ...Option) http.Handler {
+	return NewHandler(repo, opts...)
 }
 
 // NewHandler creates a standalone http.Handler serving the monitoring dashboard and REST APIs.
@@ -116,7 +123,7 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var mainHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, options.RootPath) {
 			r2 := new(http.Request)
 			*r2 = *r
@@ -131,6 +138,12 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+
+	if options.AuthMiddleware != nil {
+		mainHandler = options.AuthMiddleware(mainHandler)
+	}
+
+	return mainHandler
 }
 
 func (s *Server) handleSSEEvents(w http.ResponseWriter, r *http.Request) {

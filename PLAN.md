@@ -132,8 +132,8 @@ Meningkatkan kapabilitas antarmuka monitoring bawaan (`ui/`).
 -  [x] **Chain Dependency Graph Viewer**: Visualisasi status urutan job pada suatu chain secara grafis (diagram garis waktu urutan).
 
 ### 5.4 Web UI Security & Authentication
--  [] **Auth Middleware & Protection**: Mendukung Basic Auth, JWT Token, atau custom HTTP middleware untuk mengamankan akses ke dashboard `/ui` dan REST API bawaannya.
--  [] **RBAC (Role-Based Access Control)**: Membedakan hak akses `Read-Only Viewer` vs `Operator` (bisa Replay/Skip/Cancel job).
+-  [x] **Auth Middleware & Protection**: Mendukung Basic Auth, JWT Token, atau custom HTTP middleware untuk mengamankan akses ke dashboard `/ui` dan REST API bawaannya.
+-  [ ] **RBAC (Role-Based Access Control)**: Membedakan hak akses `Read-Only Viewer` vs `Operator` (bisa Replay/Skip/Cancel job).
 
 ---
 
