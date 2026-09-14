@@ -373,7 +373,9 @@
         </div>
         <div>
           <label class="block text-warm font-medium mb-1">Job Type *</label>
-          <input type="text" id="eqJobType" placeholder="e.g. ProcessPayment" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal">
+          <select id="eqJobType" class="w-full bg-canvas border border-border rounded-lg p-2 text-ink focus:outline-none focus:border-cyan-signal appearance-none cursor-pointer">
+            <option value="" disabled selected>Loading job types…</option>
+          </select>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -819,7 +821,23 @@
     }
 
     function openEnqueueModal() {
-      document.getElementById('enqueueModal').classList.remove('hidden');
+      const modal = document.getElementById('enqueueModal');
+      modal.classList.remove('hidden');
+      const sel = document.getElementById('eqJobType');
+      sel.innerHTML = '<option value="" disabled selected>Loading…</option>';
+      fetch(rootAPI + '/job-types')
+        .then(res => res.json())
+        .then(types => {
+          if (!Array.isArray(types) || types.length === 0) {
+            sel.innerHTML = '<option value="" disabled selected>No job types registered</option>';
+            return;
+          }
+          sel.innerHTML = types.map(t => `<option value="${t}">${t}</option>`).join('');
+          sel.selectedIndex = 0;
+        })
+        .catch(() => {
+          sel.innerHTML = '<option value="" disabled selected>Failed to load job types</option>';
+        });
     }
 
     function closeEnqueueModal() {

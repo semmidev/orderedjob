@@ -16,10 +16,17 @@ import (
 //go:embed assets/*
 var assetsFS embed.FS
 
+// JobTypesProvider is implemented by anything that can return the registered
+// job type names (e.g. *orderedjob.Engine).
+type JobTypesProvider interface {
+	JobTypes() []string
+}
+
 type Options struct {
-	RootPath string
-	Title    string
-	ReadOnly bool
+	RootPath         string
+	Title            string
+	ReadOnly         bool
+	JobTypesProvider JobTypesProvider
 }
 
 type Option func(*Options)
@@ -34,6 +41,12 @@ func WithTitle(title string) Option {
 
 func WithReadOnly(readOnly bool) Option {
 	return func(o *Options) { o.ReadOnly = readOnly }
+}
+
+// WithJobTypesProvider wires an engine (or any JobTypesProvider) into the UI
+// so the /api/job-types endpoint can return the registered handler names.
+func WithJobTypesProvider(p JobTypesProvider) Option {
+	return func(o *Options) { o.JobTypesProvider = p }
 }
 
 type Server struct {
@@ -76,6 +89,7 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 	mux.HandleFunc("/api/jobs/", s.handleJobDetailOrAction)
 	mux.HandleFunc("/api/chains", s.handleChains)
 	mux.HandleFunc("/api/enqueue", s.handleEnqueue)
+	mux.HandleFunc("/api/job-types", s.handleJobTypes)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -111,6 +125,18 @@ func NewHandler(repo orderedjob.Repository, opts ...Option) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleJobTypes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.opts.JobTypesProvider == nil {
+		respondJSON(w, http.StatusOK, []string{})
+		return
+	}
+	respondJSON(w, http.StatusOK, s.opts.JobTypesProvider.JobTypes())
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

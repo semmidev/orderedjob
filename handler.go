@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 )
 
@@ -44,6 +46,13 @@ func (r *Registry) MustGet(jobType string) (Handler, error) {
 		return nil, ErrHandlerNotFound
 	}
 	return h, nil
+}
+
+// JobTypes returns all registered job type names in sorted order.
+func (r *Registry) JobTypes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Sorted(maps.Keys(r.handlers))
 }
 
 // RegisterTyped registers a type-safe handler function that automatically unmarshals JSON payloads.

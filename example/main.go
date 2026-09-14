@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -81,21 +82,44 @@ func (m *CustomMetrics) PrintSummary(dbEngine string) {
 }
 
 func main() {
+	db := flag.String("db", "sqlserver", "database engine to use: postgres | sqlserver")
+	flag.Parse()
+
 	ctx := context.Background()
 
-	fmt.Println("================================================================")
-	fmt.Println("🚀 STARTING ORDEREDJOB POSTGRES ENGINE & WEB UI MONITORING")
-	fmt.Println("================================================================")
-	runPostgresDemo(ctx)
+	switch *db {
+	case "postgres":
+		fmt.Println("\n================================================================")
+		fmt.Println("🚀 STARTING ORDEREDJOB DEMO (PostgreSQL ENGINE)")
+		fmt.Println("================================================================")
+		repo, close := connectPostgres(ctx)
+		if repo == nil {
+			return
+		}
+		defer close()
+		startServer(ctx, repo, "PostgreSQL")
 
-	// SQL Server demo (disabled as requested):
-	// fmt.Println("\n================================================================")
-	// fmt.Println("🚀 RUNNING ORDEREDJOB DEMO (PART 2: SQL SERVER ENGINE)")
-	// fmt.Println("================================================================")
-	// runSQLServerDemo(ctx)
+	case "sqlserver":
+		fmt.Println("\n================================================================")
+		fmt.Println("🚀 STARTING ORDEREDJOB DEMO (SQL Server ENGINE)")
+		fmt.Println("================================================================")
+		repo, close := connectSQLServer(ctx)
+		if repo == nil {
+			return
+		}
+		defer close()
+		startServer(ctx, repo, "SQL Server")
+
+	default:
+		fmt.Fprintf(os.Stderr, "❌ Unknown -db value %q. Valid options: postgres, sqlserver\n", *db)
+		flag.Usage()
+		os.Exit(1)
+	}
 }
 
-func runPostgresDemo(ctx context.Context) {
+// connectPostgres opens and pings a PostgreSQL connection pool, returning the
+// repo and a close function. Returns nil repo on failure.
+func connectPostgres(ctx context.Context) (orderedjob.Repository, func()) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres@localhost:5432/orderedjob?sslmode=disable"
@@ -103,23 +127,60 @@ func runPostgresDemo(ctx context.Context) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		fmt.Printf("⚠️ Postgres connection failed: %v (make sure docker compose up -d is running)\n", err)
-		return
+		return nil, nil
 	}
-	defer pool.Close()
-
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		fmt.Printf("⚠️ Postgres ping failed: %v (skipping Postgres demo)\n", err)
-		return
+		return nil, nil
 	}
-
 	repo := pgRepo.New(pool)
 	if err := repo.Migrate(ctx); err != nil {
+		pool.Close()
 		fmt.Printf("⚠️ Postgres migration error: %v\n", err)
-		return
+		return nil, nil
 	}
+	return repo, pool.Close
+}
 
-	// Start Web UI server sharing the Postgres repository
-	handler := ui.NewHandler(repo, ui.WithRootPath("/ui"), ui.WithTitle("OrderedJob Live Monitoring (PostgreSQL)"))
+// connectSQLServer opens and pings a SQL Server connection, returning the repo
+// and a close function. Returns nil repo on failure.
+func connectSQLServer(ctx context.Context) (orderedjob.Repository, func()) {
+	dsn := os.Getenv("MSSQL_URL")
+	if dsn == "" {
+		dsn = "sqlserver://sa:StrongPassword123!@localhost:1433?database=master&encrypt=disable"
+	}
+	db, err := sql.Open("mssql", dsn)
+	if err != nil {
+		fmt.Printf("⚠️ SQL Server connection failed: %v (make sure docker compose up -d is running)\n", err)
+		return nil, nil
+	}
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		fmt.Printf("⚠️ SQL Server ping failed: %v (skipping SQL Server demo)\n", err)
+		return nil, nil
+	}
+	repo := mssqlRepo.New(db)
+	if err := repo.Migrate(ctx); err != nil {
+		db.Close()
+		fmt.Printf("⚠️ SQL Server migration error: %v\n", err)
+		return nil, nil
+	}
+	return repo, func() { db.Close() }
+}
+
+// startServer builds the engine, starts the Web UI HTTP server, then runs the
+// long-lived demo loop. It is DB-agnostic — the caller provides the repo.
+func startServer(ctx context.Context, repo orderedjob.Repository, label string) {
+	// Build engine and register handlers BEFORE starting the UI server so that
+	// /api/job-types returns the correct list from the moment the server is up.
+	eng := buildEngine(repo, label)
+
+	handler := ui.NewHandler(repo,
+		ui.WithRootPath("/ui"),
+		ui.WithTitle(fmt.Sprintf("OrderedJob Live Monitoring (%s)", label)),
+		ui.WithJobTypesProvider(eng),
+	)
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: handler,
@@ -133,36 +194,13 @@ func runPostgresDemo(ctx context.Context) {
 
 	fmt.Println("🌐 Web UI Monitoring Dashboard running at: http://localhost:8080/ui")
 
-	runEngineDemoLongLived(ctx, "PostgreSQL", repo)
+	runEngineDemoLongLived(ctx, label, eng)
 }
 
-func runSQLServerDemo(ctx context.Context) {
-	dsn := os.Getenv("MSSQL_URL")
-	if dsn == "" {
-		dsn = "sqlserver://sa:StrongPassword123!@localhost:1433?database=master&encrypt=disable"
-	}
-	db, err := sql.Open("mssql", dsn)
-	if err != nil {
-		fmt.Printf("⚠️ SQL Server connection failed: %v (make sure docker compose up -d is running)\n", err)
-		return
-	}
-	defer db.Close()
-
-	if err := db.PingContext(ctx); err != nil {
-		fmt.Printf("⚠️ SQL Server ping failed: %v (skipping SQL Server demo)\n", err)
-		return
-	}
-
-	repo := mssqlRepo.New(db)
-	if err := repo.Migrate(ctx); err != nil {
-		fmt.Printf("⚠️ SQL Server migration error: %v\n", err)
-		return
-	}
-
-	runEngineDemoLongLived(ctx, "SQL Server", repo)
-}
-
-func runEngineDemoLongLived(ctx context.Context, engineName string, repo orderedjob.Repository) {
+// buildEngine creates the engine, registers all job handlers, and returns it
+// without starting it. This allows the engine's job type list to be available
+// to the UI server before the engine starts processing.
+func buildEngine(repo orderedjob.Repository, engineName string) *orderedjob.Engine {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	metrics := &CustomMetrics{}
 
@@ -217,22 +255,26 @@ func runEngineDemoLongLived(ctx context.Context, engineName string, repo ordered
 		return nil
 	})
 
+	return eng
+}
+
+func runEngineDemoLongLived(ctx context.Context, engineName string, eng *orderedjob.Engine) {
 	if err := eng.Start(ctx); err != nil {
 		panic(fmt.Sprintf("failed to start %s engine: %v", engineName, err))
 	}
 
 	ctx = orderedjob.WithTraceID(ctx, fmt.Sprintf("trace-%s-998877", engineName))
 
-	// Enqueue Initial Sequential Seed Jobs
+	// Enqueue initial sequential seed jobs.
 	fmt.Printf("🚀 [%s] Enqueuing initial seed jobs...\n", engineName)
-	for chain := 1; chain <= 2; chain++ {
-		chainID := fmt.Sprintf("order-chain-%d", chain)
-		for seq := 1; seq <= 3; seq++ {
+	for chain := range 2 {
+		chainID := fmt.Sprintf("order-chain-%d", chain+1)
+		for seq := range 3 {
 			_, _ = eng.Enqueue(ctx, orderedjob.EnqueueRequest{
 				ChainID:     chainID,
-				Sequence:    int64(seq),
+				Sequence:    int64(seq + 1),
 				Type:        "ProcessPayment",
-				Payload:     OrderPayload{AccountID: chainID, Amount: float64(seq * 100000), Step: seq},
+				Payload:     OrderPayload{AccountID: chainID, Amount: float64((seq + 1) * 100000), Step: seq + 1},
 				TenantID:    "tenant-enterprise",
 				MaxAttempts: 3,
 			})
@@ -243,6 +285,6 @@ func runEngineDemoLongLived(ctx context.Context, engineName string, repo ordered
 	fmt.Println("   Open http://localhost:8080/ui in browser to monitor and enqueue jobs.")
 	fmt.Println("   Press Ctrl+C to exit.")
 
-	// Keep long-lived process running to handle jobs enqueued via Web UI
+	// Keep long-lived process running to handle jobs enqueued via Web UI.
 	select {}
 }

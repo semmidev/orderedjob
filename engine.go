@@ -110,6 +110,11 @@ func (e *Engine) RegisterFunc(jobType string, fn func(ctx context.Context, job J
 	e.handlers.Register(jobType, HandlerFunc(fn))
 }
 
+// JobTypes returns all registered job type names in sorted order.
+func (e *Engine) JobTypes() []string {
+	return e.handlers.JobTypes()
+}
+
 // Enqueue delegates to repo.
 func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (Job, error) {
 	if req.Type == "" {
