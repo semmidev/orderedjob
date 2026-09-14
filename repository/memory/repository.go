@@ -558,7 +558,8 @@ func (r *repo) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]ord
 		if search != "" {
 			idStr := strings.ToLower(j.ID.String())
 			keyStr := strings.ToLower(j.IdempotencyKey)
-			if !strings.Contains(idStr, search) && !strings.Contains(keyStr, search) {
+			traceStr := strings.ToLower(j.TraceID)
+			if !strings.Contains(idStr, search) && !strings.Contains(keyStr, search) && !strings.Contains(traceStr, search) {
 				continue
 			}
 		}

@@ -775,7 +775,7 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 		argIdx++
 	}
 	if filter.Search != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("(CAST(id AS VARCHAR(36)) LIKE @p%d OR idempotency_key LIKE @p%d)", argIdx, argIdx))
+		whereClauses = append(whereClauses, fmt.Sprintf("(CAST(id AS VARCHAR(36)) LIKE @p%d OR idempotency_key LIKE @p%d OR trace_id LIKE @p%d)", argIdx, argIdx, argIdx))
 		args = append(args, "%"+filter.Search+"%")
 		argIdx++
 	}

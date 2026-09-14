@@ -148,7 +148,7 @@
       <!-- Search & Filters -->
       <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
         <div class="flex-1 flex items-center space-x-3">
-          <input type="text" id="searchInput" oninput="debounceFetch()" placeholder="Search Job ID or Idempotency Key..."
+          <input type="text" id="searchInput" oninput="debounceFetch()" placeholder="Search Job ID, Idempotency Key, or Trace ID..."
                  class="w-full sm:max-w-md bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink placeholder-warm focus:outline-none focus:border-cyan-signal shadow-subtle">
 
           <select id="statusFilter" onchange="fetchJobs(1)" class="bg-card border border-border rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-cyan-signal shadow-subtle">
@@ -283,6 +283,10 @@
           <div>
             <span class="text-warm block">Idempotency Key</span>
             <span class="font-semibold text-ink" id="detailIdempotencyKey">-</span>
+          </div>
+          <div>
+            <span class="text-warm block">Trace ID</span>
+            <span class="font-semibold text-ink" id="detailTraceID">-</span>
           </div>
         </div>
 
@@ -646,6 +650,7 @@
           document.getElementById('detailAttempt').innerText = `${j.attempt} / ${j.max_attempts}`;
           document.getElementById('detailWorkerID').innerText = j.worker_id || 'None';
           document.getElementById('detailIdempotencyKey').innerText = j.idempotency_key || 'None';
+          document.getElementById('detailTraceID').innerText = j.trace_id || 'None';
 
           if (j.last_error) {
             document.getElementById('detailErrorBox').classList.remove('hidden');
