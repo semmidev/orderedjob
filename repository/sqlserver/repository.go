@@ -117,7 +117,7 @@ func (r *Repository) resolveSequence(ctx context.Context, tx *sql.Tx, req ordere
 	seq := req.Sequence
 	if seq == 0 {
 		var max sql.NullInt64
-		if err := tx.QueryRowContext(ctx, "SELECT MAX(sequence) FROM ordered_jobs WITH (UPDLOCK) WHERE chain_id = @p1", req.ChainID).Scan(&max); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT MAX(sequence) FROM ordered_jobs WITH (UPDLOCK) WHERE chain_id = ?", req.ChainID).Scan(&max); err != nil {
 			return 0, err
 		}
 		if !max.Valid {
@@ -127,7 +127,7 @@ func (r *Repository) resolveSequence(ctx context.Context, tx *sql.Tx, req ordere
 	}
 
 	var exists int
-	if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN EXISTS(SELECT 1 FROM ordered_jobs WITH (UPDLOCK) WHERE chain_id = @p1 AND sequence = @p2) THEN 1 ELSE 0 END", req.ChainID, seq).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN EXISTS(SELECT 1 FROM ordered_jobs WITH (UPDLOCK) WHERE chain_id = ? AND sequence = ?) THEN 1 ELSE 0 END", req.ChainID, seq).Scan(&exists); err != nil {
 		return 0, err
 	}
 	if exists == 1 {
@@ -135,10 +135,10 @@ func (r *Repository) resolveSequence(ctx context.Context, tx *sql.Tx, req ordere
 	}
 	if seq > 1 && !r.allowGap {
 		var predExists int
-		_ = tx.QueryRowContext(ctx, "SELECT CASE WHEN EXISTS(SELECT 1 FROM ordered_jobs WHERE chain_id = @p1 AND sequence = @p2) THEN 1 ELSE 0 END", req.ChainID, seq-1).Scan(&predExists)
+		_ = tx.QueryRowContext(ctx, "SELECT CASE WHEN EXISTS(SELECT 1 FROM ordered_jobs WHERE chain_id = ? AND sequence = ?) THEN 1 ELSE 0 END", req.ChainID, seq-1).Scan(&predExists)
 		if predExists == 0 {
 			var max sql.NullInt64
-			_ = tx.QueryRowContext(ctx, "SELECT MAX(sequence) FROM ordered_jobs WHERE chain_id = @p1", req.ChainID).Scan(&max)
+			_ = tx.QueryRowContext(ctx, "SELECT MAX(sequence) FROM ordered_jobs WHERE chain_id = ?", req.ChainID).Scan(&max)
 			if max.Valid && seq > max.Int64+1 {
 				return 0, fmt.Errorf("%w: chain %s missing seq %d", orderedjob.ErrSequenceGap, req.ChainID, seq-1)
 			}
@@ -156,7 +156,7 @@ func resolveInitialStatus(ctx context.Context, tx *sql.Tx, chainID string, seq i
 	}
 
 	var predStatus sql.NullString
-	err := tx.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = @p1 AND sequence = @p2", chainID, seq-1).Scan(&predStatus)
+	err := tx.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = ? AND sequence = ?", chainID, seq-1).Scan(&predStatus)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
@@ -220,7 +220,7 @@ func (r *Repository) enqueueSingleInTx(ctx context.Context, tx *sql.Tx, req orde
 	query := `
 		INSERT INTO ordered_jobs (id, chain_id, sequence, job_type, payload, status, max_attempts, available_at, deadline_at, idempotency_key, tenant_id, trace_id, created_at, updated_at)
 		OUTPUT inserted.id, inserted.chain_id, inserted.sequence, inserted.job_type, inserted.payload, inserted.status, inserted.attempt, inserted.max_attempts, inserted.available_at, inserted.deadline_at, COALESCE(inserted.worker_id, ''), inserted.lease_until, inserted.lease_generation, inserted.created_at, inserted.updated_at, COALESCE(inserted.idempotency_key, ''), COALESCE(inserted.tenant_id, ''), COALESCE(inserted.trace_id, '')
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, GETUTCDATE(), GETUTCDATE())
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETUTCDATE(), GETUTCDATE())
 	`
 
 	var created orderedjob.Job
@@ -243,7 +243,7 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (orderedjob.Job, err
 	query := `
 		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
 		FROM ordered_jobs
-		WHERE id = @p1
+		WHERE id = ?
 	`
 	row := r.db.QueryRowContext(ctx, query, id.String())
 	return scanJob(row)
@@ -253,7 +253,7 @@ func (r *Repository) GetByChainSeq(ctx context.Context, chainID string, seq int6
 	query := `
 		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
 		FROM ordered_jobs
-		WHERE chain_id = @p1 AND sequence = @p2
+		WHERE chain_id = ? AND sequence = ?
 	`
 	row := r.db.QueryRowContext(ctx, query, chainID, seq)
 	return scanJob(row)
@@ -281,8 +281,8 @@ func (r *Repository) Claim(ctx context.Context, workerID string, lease time.Dura
 		)
 		UPDATE ordered_jobs
 		SET status = 'PROCESSING',
-		    worker_id = @p1,
-		    lease_until = DATEADD(second, @p2, GETUTCDATE()),
+		    worker_id = ?,
+		    lease_until = DATEADD(second, ?, GETUTCDATE()),
 		    lease_generation = lease_generation + 1,
 		    attempt = attempt + 1,
 		    started_at = ISNULL(started_at, GETUTCDATE()),
@@ -311,7 +311,7 @@ func (r *Repository) Complete(ctx context.Context, id uuid.UUID, workerID string
 		query := `
 			UPDATE ordered_jobs
 			SET status = 'COMPLETED', completed_at = GETUTCDATE(), updated_at = GETUTCDATE()
-			WHERE id = @p1 AND worker_id = @p2 AND lease_generation = @p3 AND status = 'PROCESSING'
+			WHERE id = ? AND worker_id = ? AND lease_generation = ? AND status = 'PROCESSING'
 		`
 		res, err := tx.ExecContext(ctx, query, id.String(), workerID, leaseGen)
 		if err != nil {
@@ -325,14 +325,14 @@ func (r *Repository) Complete(ctx context.Context, id uuid.UUID, workerID string
 			return orderedjob.ErrLeaseConflict
 		}
 
-		if err := tx.QueryRowContext(ctx, "SELECT chain_id, sequence FROM ordered_jobs WHERE id = @p1", id.String()).Scan(&chainID, &seq); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT chain_id, sequence FROM ordered_jobs WHERE id = ?", id.String()).Scan(&chainID, &seq); err != nil {
 			return err
 		}
 
 		_, err = tx.ExecContext(ctx, `
 			UPDATE ordered_jobs
 			SET status = 'PENDING', updated_at = GETUTCDATE()
-			WHERE chain_id = @p1 AND sequence = @p2 AND status = 'BLOCKED'
+			WHERE chain_id = ? AND sequence = ? AND status = 'BLOCKED'
 		`, chainID, seq+1)
 		return err
 	})
@@ -347,8 +347,8 @@ func (r *Repository) Fail(ctx context.Context, id uuid.UUID, workerID string, le
 
 	query := `
 		UPDATE ordered_jobs
-		SET status = @p1, failed_at = GETUTCDATE(), last_error = @p2, updated_at = GETUTCDATE()
-		WHERE id = @p3 AND worker_id = @p4 AND lease_generation = @p5 AND status = 'PROCESSING'
+		SET status = ?, failed_at = GETUTCDATE(), last_error = ?, updated_at = GETUTCDATE()
+		WHERE id = ? AND worker_id = ? AND lease_generation = ? AND status = 'PROCESSING'
 	`
 	res, err := r.db.ExecContext(ctx, query, status, errMsg, id.String(), workerID, leaseGen)
 	if err != nil {
@@ -367,8 +367,8 @@ func (r *Repository) Fail(ctx context.Context, id uuid.UUID, workerID string, le
 func (r *Repository) Retry(ctx context.Context, id uuid.UUID, workerID string, leaseGen int, errMsg string, nextAvailable time.Time) error {
 	query := `
 		UPDATE ordered_jobs
-		SET status = 'RETRYING', available_at = @p1, last_error = @p2, updated_at = GETUTCDATE()
-		WHERE id = @p3 AND worker_id = @p4 AND lease_generation = @p5 AND status = 'PROCESSING'
+		SET status = 'RETRYING', available_at = ?, last_error = ?, updated_at = GETUTCDATE()
+		WHERE id = ? AND worker_id = ? AND lease_generation = ? AND status = 'PROCESSING'
 	`
 	res, err := r.db.ExecContext(ctx, query, nextAvailable, errMsg, id.String(), workerID, leaseGen)
 	if err != nil {
@@ -392,8 +392,8 @@ func (r *Repository) Heartbeat(ctx context.Context, id uuid.UUID, workerID strin
 
 	query := `
 		UPDATE ordered_jobs
-		SET lease_until = DATEADD(second, @p1, GETUTCDATE()), updated_at = GETUTCDATE()
-		WHERE id = @p2 AND worker_id = @p3 AND lease_generation = @p4 AND status = 'PROCESSING'
+		SET lease_until = DATEADD(second, ?, GETUTCDATE()), updated_at = GETUTCDATE()
+		WHERE id = ? AND worker_id = ? AND lease_generation = ? AND status = 'PROCESSING'
 	`
 	res, err := r.db.ExecContext(ctx, query, leaseSec, id.String(), workerID, leaseGen)
 	if err != nil {
@@ -413,7 +413,7 @@ func (r *Repository) RequestCancel(ctx context.Context, id uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE ordered_jobs
 		SET status = 'CANCEL_REQUESTED', updated_at = GETUTCDATE()
-		WHERE id = @p1 AND status IN ('PENDING', 'BLOCKED', 'PROCESSING', 'RETRYING')
+		WHERE id = ? AND status IN ('PENDING', 'BLOCKED', 'PROCESSING', 'RETRYING')
 	`, id.String())
 	if err != nil {
 		return err
@@ -432,7 +432,7 @@ func (r *Repository) ConfirmCancel(ctx context.Context, id uuid.UUID, workerID s
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE ordered_jobs
 		SET status = 'CANCELLED', updated_at = GETUTCDATE()
-		WHERE id = @p1 AND worker_id = @p2 AND lease_generation = @p3 AND status = 'CANCEL_REQUESTED'
+		WHERE id = ? AND worker_id = ? AND lease_generation = ? AND status = 'CANCEL_REQUESTED'
 	`, id.String(), workerID, leaseGen)
 	if err != nil {
 		return err
@@ -453,7 +453,7 @@ func (r *Repository) RecoverStale(ctx context.Context, limit int, retryPolicy fu
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT TOP (@p1) id, attempt, max_attempts
+		SELECT TOP (?) id, attempt, max_attempts
 		FROM ordered_jobs WITH (UPDLOCK, READPAST)
 		WHERE status = 'PROCESSING' AND lease_until < GETUTCDATE()
 	`, limit)
@@ -491,8 +491,8 @@ func (r *Repository) RecoverStale(ctx context.Context, limit int, retryPolicy fu
 
 		res, err := r.db.ExecContext(ctx, `
 			UPDATE ordered_jobs
-			SET status = @p1, available_at = @p2, worker_id = NULL, lease_until = NULL, lease_generation = lease_generation + 1, updated_at = GETUTCDATE()
-			WHERE id = @p3 AND status = 'PROCESSING' AND lease_until < GETUTCDATE()
+			SET status = ?, available_at = ?, worker_id = NULL, lease_until = NULL, lease_generation = lease_generation + 1, updated_at = GETUTCDATE()
+			WHERE id = ? AND status = 'PROCESSING' AND lease_until < GETUTCDATE()
 		`, nextStatus, nextAvailable, it.id)
 		if err != nil {
 			continue
@@ -508,7 +508,7 @@ func (r *Repository) ReplayJob(ctx context.Context, id uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE ordered_jobs
 		SET status = 'PENDING', attempt = 0, available_at = GETUTCDATE(), updated_at = GETUTCDATE()
-		WHERE id = @p1 AND status IN ('FAILED', 'DEAD_LETTERED', 'CANCELLED')
+		WHERE id = ? AND status IN ('FAILED', 'DEAD_LETTERED', 'CANCELLED')
 	`, id.String())
 	if err != nil {
 		return err
@@ -531,7 +531,7 @@ func (r *Repository) SkipJob(ctx context.Context, id uuid.UUID) error {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE ordered_jobs
 			SET status = 'COMPLETED', updated_at = GETUTCDATE()
-			WHERE id = @p1 AND status IN ('FAILED', 'DEAD_LETTERED', 'CANCELLED', 'BLOCKED')
+			WHERE id = ? AND status IN ('FAILED', 'DEAD_LETTERED', 'CANCELLED', 'BLOCKED')
 		`, id.String())
 		if err != nil {
 			return err
@@ -544,14 +544,14 @@ func (r *Repository) SkipJob(ctx context.Context, id uuid.UUID) error {
 			return orderedjob.ErrNotFound
 		}
 
-		if err := tx.QueryRowContext(ctx, "SELECT chain_id, sequence FROM ordered_jobs WHERE id = @p1", id.String()).Scan(&chainID, &seq); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT chain_id, sequence FROM ordered_jobs WHERE id = ?", id.String()).Scan(&chainID, &seq); err != nil {
 			return err
 		}
 
 		_, err = tx.ExecContext(ctx, `
 			UPDATE ordered_jobs
 			SET status = 'PENDING', updated_at = GETUTCDATE()
-			WHERE chain_id = @p1 AND sequence = @p2 AND status = 'BLOCKED'
+			WHERE chain_id = ? AND sequence = ? AND status = 'BLOCKED'
 		`, chainID, seq+1)
 		return err
 	})
@@ -562,7 +562,7 @@ func (r *Repository) PromoteNext(ctx context.Context, chainID string, completedS
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE ordered_jobs
 		SET status = 'PENDING', updated_at = GETUTCDATE()
-		WHERE chain_id = @p1 AND sequence = @p2 AND status = 'BLOCKED'
+		WHERE chain_id = ? AND sequence = ? AND status = 'BLOCKED'
 	`, chainID, completedSeq+1)
 	return err
 }
@@ -590,9 +590,7 @@ func (r *Repository) ListPendingChains(ctx context.Context) ([]string, error) {
 }
 
 func lockAppChain(ctx context.Context, tx *sql.Tx, chainID string) error {
-	_, err := tx.ExecContext(ctx, "EXEC sp_getapplock @Resource = @p1, @LockMode = @p2, @LockOwner = @p3",
-		chainID, "Exclusive", "Transaction",
-	)
+	_, err := tx.ExecContext(ctx, "EXEC sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction'", chainID)
 	return err
 }
 
@@ -603,7 +601,7 @@ func findExistingByIdempotencyKey(ctx context.Context, tx *sql.Tx, key string) (
 	query := `
 		SELECT id, chain_id, sequence, job_type, payload, status, attempt, max_attempts, available_at, deadline_at, COALESCE(worker_id, ''), lease_until, lease_generation, created_at, updated_at, started_at, completed_at, failed_at, COALESCE(idempotency_key, ''), COALESCE(tenant_id, ''), COALESCE(last_error, ''), COALESCE(trace_id, '')
 		FROM ordered_jobs
-		WHERE idempotency_key = @p1
+		WHERE idempotency_key = ?
 	`
 	row := tx.QueryRowContext(ctx, query, key)
 	job, err := scanJob(row)
@@ -755,27 +753,22 @@ func (r *Repository) GetStats(ctx context.Context) (orderedjob.Stats, error) {
 func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) ([]orderedjob.Job, int64, error) {
 	whereClauses := []string{"1=1"}
 	args := []any{}
-	argIdx := 1
 
 	if filter.ChainID != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("chain_id = @p%d", argIdx))
+		whereClauses = append(whereClauses, "chain_id = ?")
 		args = append(args, filter.ChainID)
-		argIdx++
 	}
 	if filter.Status != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("status = @p%d", argIdx))
+		whereClauses = append(whereClauses, "status = ?")
 		args = append(args, filter.Status)
-		argIdx++
 	}
 	if filter.JobType != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("job_type = @p%d", argIdx))
+		whereClauses = append(whereClauses, "job_type = ?")
 		args = append(args, filter.JobType)
-		argIdx++
 	}
 	if filter.Search != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("(CAST(id AS VARCHAR(36)) LIKE @p%d OR idempotency_key LIKE @p%d OR trace_id LIKE @p%d)", argIdx, argIdx, argIdx))
-		args = append(args, "%"+filter.Search+"%")
-		argIdx++
+		whereClauses = append(whereClauses, "(CAST(id AS VARCHAR(36)) LIKE ? OR idempotency_key LIKE ? OR trace_id LIKE ?)")
+		args = append(args, "%"+filter.Search+"%", "%"+filter.Search+"%", "%"+filter.Search+"%")
 	}
 
 	whereStmt := strings.Join(whereClauses, " AND ")
@@ -821,8 +814,8 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 		FROM ordered_jobs
 		WHERE %s
 		ORDER BY %s %s
-		OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY
-	`, whereStmt, orderByCol, orderDir, argIdx, argIdx+1)
+		OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+	`, whereStmt, orderByCol, orderDir)
 
 	args = append(args, offset, limit)
 
@@ -847,12 +840,10 @@ func (r *Repository) ListJobs(ctx context.Context, filter orderedjob.JobFilter) 
 func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilter) ([]orderedjob.ChainSummary, int64, error) {
 	var whereClause string
 	var args []any
-	argIdx := 1
 
 	if filter.Search != "" {
-		whereClause = fmt.Sprintf("WHERE chain_id LIKE @p%d", argIdx)
+		whereClause = "WHERE chain_id LIKE ?"
 		args = append(args, "%"+filter.Search+"%")
-		argIdx++
 	}
 
 	// #nosec G201
@@ -902,8 +893,8 @@ func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilt
 		%s
 		GROUP BY chain_id
 		ORDER BY %s %s
-		OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY
-	`, whereClause, orderByCol, orderDir, argIdx, argIdx+1)
+		OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+	`, whereClause, orderByCol, orderDir)
 
 	args = append(args, offset, limit)
 
@@ -920,7 +911,7 @@ func (r *Repository) ListChains(ctx context.Context, filter orderedjob.ChainFilt
 			return nil, 0, err
 		}
 
-		_ = r.db.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = @p1 AND sequence = @p2", cs.ChainID, cs.MaxSequence).Scan(&cs.LatestStatus)
+		_ = r.db.QueryRowContext(ctx, "SELECT status FROM ordered_jobs WHERE chain_id = ? AND sequence = ?", cs.ChainID, cs.MaxSequence).Scan(&cs.LatestStatus)
 
 		summaries = append(summaries, cs)
 	}
